@@ -1,0 +1,18 @@
+name: remote-work
+root:
+  id: work
+  children:
+    - id: local
+    - id: server
+      host: devbox  # An alias from ~/.ssh/config; ProxyJump works here too.
+      cwd: ~/  # This path is resolved on devbox.
+      children:
+        - id: shell
+        - id: project
+          children:
+            - id: edit
+              command: vi
+            - id: build
+              command: |
+                printf 'Build workspace: %s\n' "$PWD"
+                exec bash -l

@@ -1,0 +1,18 @@
+name: work
+root:
+  id: work
+  cwd: ~/
+  children:
+    - id: shell
+    - id: project
+      cwd: ~/  # Change this to your project directory.
+      children:
+        - id: editor
+          command: vi
+        - id: git
+          command: [bash, -l]
+        - id: build
+          children:
+            - id: shell
+            - id: monitor
+              command: top

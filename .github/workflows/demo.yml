@@ -1,0 +1,65 @@
+name: Test and publish terminal demo
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: demo-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  demo:
+    runs-on: ubuntu-24.04
+    container: ubuntu:24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install prerequisites and Nix using the official installer
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git xz-utils bzip2 python3
+          useradd --create-home --shell /bin/bash builder
+          install -d -m 0755 -o builder -g builder /nix
+          chown builder:builder "$GITHUB_WORKSPACE"
+          curl --fail --location --retry 3 https://nixos.org/nix/install -o /tmp/install-nix
+          runuser -u builder -- sh /tmp/install-nix --no-daemon --yes --no-channel-add --no-modify-profile
+          install -d -m 0755 /etc/nix
+          cat > /etc/nix/nix.conf <<'EOF'
+          experimental-features = nix-command flakes
+          # The unprivileged single-user installer runs inside this job container.
+          sandbox = false
+          EOF
+
+      - name: Fetch the exact source commit without a checkout action
+        env:
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          runuser -u builder -- git init "$GITHUB_WORKSPACE"
+          runuser -u builder -- git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/$SOURCE_REPOSITORY.git"
+          runuser -u builder -- git -C "$GITHUB_WORKSPACE" fetch --depth 1 origin "$SOURCE_SHA"
+          runuser -u builder -- git -C "$GITHUB_WORKSPACE" checkout --detach FETCH_HEAD
+
+      - name: Run the isolated test suite and build the recording
+        run: |
+          set -euo pipefail
+          runuser -u builder -- /home/builder/.nix-profile/bin/nix flake check path:. -L
+          runuser -u builder -- /home/builder/.nix-profile/bin/nix build path:.#demo -L --out-link demo-result
+
+      - name: Publish the README demo as release assets
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: python3 .github/publish-demo.py demo-result
