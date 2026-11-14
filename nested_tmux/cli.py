@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 
-from .config import Error, load, parse
+from .config import Error, as_data, load, parse
 from .control import clean_env
 from .runtime import Tree, launcher
 from .service import private_directory, request, serve, state_path
@@ -27,7 +27,7 @@ def start(config, config_path, state, ssh_config):
     args = launcher("_serve")
     if config_path is not None:
         args.append(str(config_path))
-    args += ["--runtime-dir", str(state.parent)]
+    args += ["--runtime-dir", str(state.parent), "--name", config.name]
     if ssh_config:
         args += ["--ssh-config", str(ssh_config)]
     with (state / "controller.log").open("w") as log:
@@ -56,19 +56,25 @@ def start(config, config_path, state, ssh_config):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv:
-        argv = ["attach"]
+    # The workspace selector is valid before or after the subcommand. With
+    # only options (or no arguments), attach is the default operation.
+    selector = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    selector.add_argument("--name", "-n", help="workspace name (default: default or YAML name)")
+    selection, argv = selector.parse_known_args(argv)
+    if not argv or (argv[0].startswith("-") and argv[0] not in {"-h", "--help"}):
+        argv.insert(0, "attach")
     parser = argparse.ArgumentParser(
-        description="Terminal trees, locally and over SSH. With no arguments, open the default workspace."
+        description="Terminal trees, locally and over SSH. With no command, attach to a workspace.",
+        parents=[selector],
     )
     sub = parser.add_subparsers(dest="op", required=True)
     for op in ("up", "attach", "status", "down", "stop", "check", "dump", "_serve"):
-        p = sub.add_parser(op)
+        p = sub.add_parser(op, parents=[selector])
         p.add_argument(
             "config",
             type=Path,
             nargs="?",
-            help="optional YAML; otherwise use the default workspace",
+            help="optional YAML initialization",
         )
         p.add_argument("--runtime-dir", type=Path)
         p.add_argument("--ssh-config", type=Path)
@@ -77,12 +83,12 @@ def main(argv=None):
         if op == "dump":
             p.add_argument("-o", "--output", type=Path)
     for op in ("add-terminal", "add-row", "remove", "rename"):
-        p = sub.add_parser(op)
+        p = sub.add_parser(op, parents=[selector])
         p.add_argument(
             "config",
             type=Path,
             nargs="?",
-            help="optional YAML; otherwise use the default workspace",
+            help="optional YAML initialization",
         )
         p.add_argument("--runtime-dir", type=Path)
         if op in {"remove", "rename"}:
@@ -98,7 +104,7 @@ def main(argv=None):
                 p.add_argument("--host")
             else:
                 p.add_argument("--command")
-    nav = sub.add_parser("nav")
+    nav = sub.add_parser("nav", parents=[selector])
     nav.add_argument("config", type=Path, nargs="?")
     nav.add_argument("action", choices=("up", "down", "left", "right", "new", "last", "copy"))
     nav.add_argument("--runtime-dir", type=Path)
@@ -138,6 +144,8 @@ def main(argv=None):
                 }
             )
         )
+        if selection.name is not None:
+            config = parse({**as_data(config), "name": selection.name})
         state = state_path(config.name, args.runtime_dir)
         if args.op == "check":
             print(f"{config.name}: valid ({sum(n.branch for n in config.root.walk())} rows)")

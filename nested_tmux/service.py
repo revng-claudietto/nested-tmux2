@@ -8,6 +8,7 @@ import signal
 import socket
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 from .config import Error
@@ -86,7 +87,13 @@ def serve(config, state, ssh_config=None):
         path.chmod(0o600)
         server.listen(16)
         server.settimeout(0.5)
-        while running:
+        next_reap = time.monotonic() + 0.5
+        while running and not tree.closed:
+            if time.monotonic() >= next_reap:
+                tree.reap_exited()
+                next_reap = time.monotonic() + 0.5
+                if tree.closed:
+                    break
             try:
                 client, _ = server.accept()
             except TimeoutError:

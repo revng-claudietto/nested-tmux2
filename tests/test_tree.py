@@ -6,6 +6,8 @@ from nested_tmux.config import Error
 class TreeTests(TreeCase):
     def test_create_navigate_and_restart_without_replaying_commands(self):
         tree = self.build()
+        for path in tree.rows:
+            self.assertEqual(self.query(path, "list-windows", "-F", "#{window_index}"), ["0", "1"])
         before = {
             path: self.query(path, "list-panes", "-a", "-F", "#{pane_id}:#{pane_pid}")
             for path in tree.rows
@@ -53,6 +55,29 @@ class TreeTests(TreeCase):
         self.assertEqual(
             self.query("work", "display-message", "-p", "-t", wid, "#{pane_dead_status}"), ["7"]
         )
+        tree.reap_exited()
+        self.assertTrue(tree.closed)
+
+    def test_remove_last_child_prunes_ancestors_and_closes_root(self):
+        tree = self.build()
+        tree.remove("work/project/build/one")
+        self.assertEqual(
+            self.query("work/project/build", "list-windows", "-F", "#{window_index}"), ["0"]
+        )
+        tree.remove("work/project/build/two")
+        self.assertNotIn("work/project/build", tree.rows)
+        tree.remove("work/project/edit")
+        self.assertNotIn("work/project", tree.rows)
+        self.assertEqual(tree.remove("work/shell"), {"stopped": True})
+        self.assertTrue(tree.closed)
+
+    def test_unreachable_row_is_not_treated_as_exited(self):
+        tree = self.build()
+        before = tree.config
+        tree.rows["work/project/build"].control.close()
+        tree.reap_exited()
+        self.assertEqual(tree.config, before)
+        self.assertIn("work/project/build", tree.errors)
 
     def test_argv_is_not_interpreted_as_shell(self):
         data = fixture()

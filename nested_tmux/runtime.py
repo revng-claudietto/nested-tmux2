@@ -4,7 +4,6 @@ import base64
 import hashlib
 import json
 import re
-import secrets
 import shlex
 import socket
 import subprocess
@@ -49,6 +48,7 @@ class Tree:
         self._install_config(config)
         self.active = config.root.path
         self.errors = {}
+        self.closed = False
 
     def _install_config(self, config):
         self._metadata(config)  # Reject oversized edits before changing live state.
@@ -121,7 +121,12 @@ class Tree:
     def _prepare_row(self, row):
         ctl = row.control
         for name, value in {
+            # Keep an exited pane only until the controller removes it from the
+            # live tree. This also makes very short startup commands observable.
             "remain-on-exit": "on",
+            "remain-on-exit-format": "",
+            "base-index": "0",
+            "renumber-windows": "on",
             "automatic-rename": "off",
             "allow-rename": "off",
             "allow-passthrough": "off",
@@ -129,7 +134,8 @@ class Tree:
             "prefix": "None",
             "prefix2": "None",
             "mouse": "off",
-            "status-left": "",
+            "status-left": f"[{self.config.name}] " if row is self.root else "",
+            "status-left-length": "40",
             "status-right": "",
             "status-style": "bg=colour237,fg=colour255",
             "window-status-format": " #I #W ",
@@ -161,18 +167,22 @@ class Tree:
         for child in row.node.children:
             wid = existing.get(child.path)
             if wid is None:
-                wid = ctl.call(
-                    "new-window",
-                    "-d",
-                    "-P",
-                    "-F",
-                    "#{window_id}",
-                    "-n",
-                    child.title,
-                    "-c",
-                    row.node.cwd if child.branch else child.cwd,
-                    "sleep 2147483647",
-                )[0]
+                if bootstrap:
+                    wid = bootstrap.pop(0)
+                    ctl.call("rename-window", "-t", wid, child.title)
+                else:
+                    wid = ctl.call(
+                        "new-window",
+                        "-d",
+                        "-P",
+                        "-F",
+                        "#{window_id}",
+                        "-n",
+                        child.title,
+                        "-c",
+                        row.node.cwd if child.branch else child.cwd,
+                        "sleep 2147483647",
+                    )[0]
                 ctl.call("set-option", "-w", "-t", wid, "@nt-node", child.path)
             row.windows[child.path] = wid
             ready = ctl.call("show-options", "-wqv", "-t", wid, "@nt-ready")
@@ -215,6 +225,8 @@ class Tree:
             ctl.call("select-window", "-t", row.windows[row.node.children[0].path])
             for wid in bootstrap:
                 ctl.call("kill-window", "-t", wid)
+        # Also repair numbering in a workspace created by an older controller.
+        ctl.call("move-window", "-r", "-t", "tree:")
 
     def _bridge(self, parent, child):
         args = [
@@ -319,7 +331,11 @@ class Tree:
                 "tree",
             )
         elif action == "new":
-            return self.add(self.active, {"id": "term-" + secrets.token_hex(4)})
+            used = {child.path.rsplit("/", 1)[-1] for child in row.node.children}
+            ident, number = "shell", 2
+            while ident in used:
+                ident, number = f"shell-{number}", number + 1
+            return self.add(self.active, {"id": ident})
         elif action == "remove":
             return self.remove(self.current_path())
         elif action == "copy":
@@ -381,9 +397,16 @@ class Tree:
         self._styles()
         return self.status()
 
-    def _kill_row(self, row):
+    def _kill_row(self, row, graceful=False):
         result = subprocess.run(
-            row.control.transport.wrap(["tmux", "-L", row.control.socket_name, "kill-server"]),
+            row.control.transport.wrap(
+                [
+                    "tmux",
+                    "-L",
+                    row.control.socket_name,
+                    *(["kill-session", "-t", "tree"] if graceful else ["kill-server"]),
+                ]
+            ),
             env=clean_env(),
             capture_output=True,
             text=True,
@@ -401,12 +424,15 @@ class Tree:
         parent = self.parents.get(path)
         if not parent:
             raise Error(f"unknown tree path: {path}")
+        # Removing the last terminal also removes its now-empty ancestor rows.
+        while len(self.rows[parent].node.children) == 1:
+            path = parent
+            if path == self.config.root.path:
+                self.down()
+                return {"stopped": True}
+            parent = self.parents[path]
         data = as_data(self.config)
         container = self._find(data, parent)
-        if len(container["children"]) == 1:
-            raise Error(
-                "a row needs at least one terminal; remove its parent row or use down instead"
-            )
         container["children"] = [
             child for child in container["children"] if child["id"] != path.rsplit("/", 1)[-1]
         ]
@@ -425,6 +451,45 @@ class Tree:
         self._save_metadata()
         self._styles()
         return self.status()
+
+    def reap_exited(self):
+        """Observe leaf exits through control replies, including over SSH.
+
+        An unreachable server is not evidence of exit. Remote window IDs are
+        resolved only within that row's locally owned map, never as tree paths.
+        """
+        exited = []
+        for path, row in list(self.rows.items()):
+            try:
+                panes = row.control.call(
+                    "list-panes",
+                    "-s",
+                    "-t",
+                    "tree",
+                    "-F",
+                    "#{window_id}\t#{pane_dead}\t#{@nt-ready}",
+                    timeout=2,
+                )
+                dead = {
+                    fields[0]
+                    for line in panes
+                    if len(fields := line.split("\t")) == 3 and fields[1:] == ["1", "1"]
+                }
+                exited.extend(
+                    child.path
+                    for child in row.node.children
+                    if not child.branch and row.windows.get(child.path) in dead
+                )
+            except Error as exc:
+                self.errors[path] = str(exc)
+        for path in exited:
+            if self.closed:
+                break
+            if path in self.parents:
+                try:
+                    self.remove(path)
+                except (Error, OSError, subprocess.TimeoutExpired) as exc:
+                    self.errors[path] = str(exc)
 
     def rename(self, path, title):
         path = path or self.current_path()
@@ -484,11 +549,13 @@ class Tree:
         # Stop attachment loops before their child servers.
         for row in self.rows.values():
             try:
-                self._kill_row(row)
+                # Normal session termination lets attached terminals exit cleanly.
+                self._kill_row(row, graceful=row is self.root)
             except Error as exc:
                 failures.append(f"{row.node.path}: {exc}")
         if failures:
             raise Error("could not stop all rows: " + "; ".join(failures))
+        self.closed = True
 
     def close(self):
         for row in self.rows.values():

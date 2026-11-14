@@ -53,8 +53,19 @@ Remote metadata is never used as local tree authority.
 `up` reconnects to a live root, recovers its tree, and reconnects surviving child
 servers. It only launches missing terminals or recreates missing servers.
 Launch markers distinguish an unstarted window from a launched window and an
-interrupted, uncertain launch. Completed commands remain visible and are not
-replayed merely because they exited.
+interrupted, uncertain launch. The controller checks pane exit state through
+control mode on a half-second maintenance interval, removes exited leaves from
+the live tree, and prunes empty ancestor rows. Closing the last terminal ends
+the workspace. Internally `remain-on-exit` retains panes until this cleanup,
+including commands that finish before startup completes; they are never replayed
+merely because they exited. When the controller is stopped, cleanup waits for
+its return. Unavailable control streams are not evidence that a terminal exited.
+
+`--name` selects an independent workspace without a YAML file, or overrides the
+name in a startup recipe. Each name maps to its own private runtime directory,
+controller, and tmux socket namespace, including separate servers on remote
+hosts. Dumps include the selected name. Reusing a name reconnects to that live
+tree; distinct names do not share terminal state.
 
 Adding/removing nodes changes live metadata. Dumping exports that tree with
 best-effort cwd observations. It preserves the configured command, rather than

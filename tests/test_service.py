@@ -81,6 +81,7 @@ class ServiceCase(TreeCase):
             cwd=cwd,
             start_new_session=True,
         )
+        self.attachment = proc
         os.close(slave)
         self.output = bytearray()
         done = threading.Event()
@@ -135,8 +136,16 @@ class ServiceTests(ServiceCase):
         self.assertEqual(
             self.tmux("work", "display-message", "-p", "#{pane_current_path}"), str(self.directory)
         )
+        self.assertEqual(
+            self.tmux("work", "list-windows", "-F", "#{window_index}:#{window_name}"), "0:shell"
+        )
+        self.assertEqual(self.tmux("work", "show-options", "-gv", "status-left"), "[default]")
         os.write(terminal, b"\x14")
         eventually(lambda: len(request(self.state, "status")["rows"][0]["windows"]) == 2)
+        self.assertEqual(
+            self.tmux("work", "list-windows", "-F", "#{window_index}:#{window_name}"),
+            "0:shell\n1:shell-2",
+        )
 
         def cli(*args):
             result = subprocess.run(
@@ -163,6 +172,134 @@ class ServiceTests(ServiceCase):
         eventually(lambda: not (self.state / "rpc.sock").exists())
         cli("up")
         self.assertEqual(before, self.tmux("work", "list-panes", "-a", "-F", "#{pane_pid}"))
+
+    def test_shell_exit_prunes_empty_rows_and_last_terminal_ends_workspace(self):
+        self.launch(
+            {
+                "name": "exit-test",
+                "root": {
+                    "id": "work",
+                    "children": [
+                        {"id": "shell"},
+                        {
+                            "id": "project",
+                            "children": [
+                                {"id": "tools", "children": [{"id": "shell"}]},
+                            ],
+                        },
+                    ],
+                },
+            }
+        )
+        terminal = self.attach_pty()
+        root_pid = self.tmux("work", "display-message", "-p", "#{pane_pid}")
+        # Go into two nested rows, then exit their only shell from the real PTY.
+        os.write(terminal, b"\x1b[1;3C\x1b[1;3A\x1b[1;3A")
+        eventually(lambda: request(self.state, "status")["active"] == "work/project/tools")
+        os.write(terminal, b"exit\r")
+        eventually(lambda: len(request(self.state, "status")["rows"]) == 1)
+        self.assertEqual(request(self.state, "status")["active"], "work")
+        self.assertEqual(self.tmux("work", "display-message", "-p", "#{pane_pid}"), root_pid)
+        self.assertEqual(
+            [n["id"] for n in request(self.state, "dump")["root"]["children"]], ["shell"]
+        )
+        # Exited branches do not come back on controller restart.
+        request(self.state, "stop")
+        eventually(lambda: not (self.state / "rpc.sock").exists())
+        self.status = start(self.config, self.config_path, self.state, None)
+        self.assertEqual(len(self.status["rows"]), 1)
+        os.write(terminal, b"exit\r")
+        eventually(lambda: not (self.state / "rpc.sock").exists())
+        eventually(lambda: self.attachment.poll() is not None)
+        self.assertEqual(self.attachment.returncode, 0)
+
+    def test_named_workspaces_are_independent_without_yaml(self):
+        from nested_tmux.runtime import launcher
+
+        binary = os.environ.get("NESTED_TMUX_TEST_BINARY")
+        command = [binary] if binary else launcher()
+
+        def cli(*args):
+            result = subprocess.run(
+                [*command, *args, "--runtime-dir", str(self.directory)],
+                cwd=self.directory,
+                env=clean_env(),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout
+
+        for name in ("alpha", "beta"):
+            self.addCleanup(
+                subprocess.run,
+                [*command, "down", "--name", name, "--runtime-dir", str(self.directory)],
+                env=clean_env(),
+                capture_output=True,
+                timeout=30,
+            )
+        alpha = json.loads(cli("up", "--name", "alpha"))
+        beta = json.loads(cli("--name", "beta", "up"))
+        self.assertNotEqual(alpha["rows"][0]["socket"], beta["rows"][0]["socket"])
+        cli("add-terminal", "job", "--name", "alpha", "--command", "cat")
+        cli("rename", "--name", "alpha", "work/job", "Job")
+        cli("nav", "--name", "alpha", "new")
+        saved = yaml.safe_load(cli("dump", "--name", "alpha"))
+        self.assertEqual(saved["name"], "alpha")
+        self.assertEqual([n["id"] for n in saved["root"]["children"]], ["shell", "job", "shell-2"])
+        self.assertEqual(saved["root"]["children"][1]["title"], "Job")
+        self.assertEqual(json.loads(cli("status", "--name", "beta")), beta)
+        cli("stop", "--name", "alpha")
+        eventually(lambda: not (state_path("alpha", self.directory) / "rpc.sock").exists())
+        resumed = json.loads(cli("up", "--name", "alpha"))
+        self.assertEqual(len(resumed["rows"][0]["windows"]), 3)
+        cli("down", "--name", "alpha")
+        self.assertEqual(json.loads(cli("status", "--name", "beta")), beta)
+        terminal = self.attach_pty(
+            [*command, "--name", "beta"],
+            {"XDG_RUNTIME_DIR": str(self.directory)},
+            self.directory,
+        )
+        eventually(lambda: b"shell" in self.output)
+        os.write(terminal, b"\x01d")
+        eventually(lambda: self.attachment.poll() is not None)
+        self.assertEqual(self.attachment.returncode, 0)
+        self.assertEqual(json.loads(cli("status", "--name", "beta"))["name"], "beta")
+
+    def test_name_overrides_yaml_name_and_is_exported(self):
+        import contextlib
+        import io
+
+        from nested_tmux.cli import main
+
+        self.launch()
+        # Select the live YAML workspace using just its name.
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(
+                main(["dump", "--name", self.config.name, "--runtime-dir", str(self.directory)]), 0
+            )
+        self.assertEqual(yaml.safe_load(output.getvalue())["name"], self.config.name)
+        data = fixture()
+        data["name"] = "unused-recipe-name"
+        self.config_path.write_text(yaml.safe_dump(data))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(
+                main(
+                    [
+                        "up",
+                        str(self.config_path),
+                        "--name",
+                        self.config.name,
+                        "--runtime-dir",
+                        str(self.directory),
+                    ]
+                ),
+                0,
+            )
+        self.assertEqual(json.loads(output.getvalue())["rows"], self.status["rows"])
 
     def test_original_creation_keys_branch_prompt_and_removal(self):
         self.launch()

@@ -10,8 +10,29 @@ file is needed. Run it from a plain terminal, then build your tree as you work:
 1. **Ctrl+t** creates a regular terminal tab.
 2. **Ctrl+a, Ctrl+s** creates a branch with its own row; enter a name at the prompt.
 3. **Alt+Left/Right** switches tabs. **Alt+Up/Down** moves into or out of a branch.
-4. **Ctrl+a, x** closes the selected terminal or branch after confirmation.
-5. **Ctrl+a, d** detaches. Run the same command again to reconnect.
+4. Type **exit** or press **Ctrl+d** at a shell prompt to close that terminal.
+   Empty branches close automatically; closing the last terminal exits the workspace.
+5. **Ctrl+a, x** closes the selected terminal or entire branch after confirmation.
+6. **Ctrl+a, d** detaches and keeps everything running. Run the same command to reconnect.
+
+Tabs start at **0** and new shells are named `shell`, `shell-2`, and so on.
+Use **Ctrl+a, A** to rename one.
+
+To open entirely separate workspaces by name:
+
+```sh
+nix run github:revng-claudietto/nested-tmux2 -- --name work
+nix run github:revng-claudietto/nested-tmux2 -- --name personal
+```
+
+Run the same command to reconnect to that named workspace. Omit `--name` to use
+`default`. The outer row displays the workspace name.
+From a local checkout, use `nix run . -- --name work`.
+To terminate a whole workspace from another terminal:
+
+```sh
+nix run github:revng-claudietto/nested-tmux2 -- down --name work
+```
 
 Each branch has a tmux server and each child is a tab. A branch tab displays its
 child server, so the rows stay visible. A local controller handles navigation
@@ -67,7 +88,7 @@ To close a branch, press **Alt+Down** to focus its parent row, keep that branch
 selected, then press **Ctrl+a, x** and confirm with **y**. This terminates every
 terminal and nested row inside it. From the CLI, use
 `nested-tmux remove work/project`. Use `down` to close the root workspace.
-A parent row must retain at least one child; otherwise close that parent row.
+Removing a row's last terminal also closes that row and any empty ancestors.
 
 With `nested-tmux` on PATH, you can also manage the default workspace by hand:
 
@@ -81,6 +102,15 @@ nested-tmux down
 
 With Nix, pass those arguments after `--`, for example
 `nix run github:revng-claudietto/nested-tmux2 -- add-row project --parent work`.
+
+Add `--name work` to any command to select a named workspace:
+
+```sh
+nested-tmux add-row project --name work
+nested-tmux dump --name work -o saved-work.yaml
+nested-tmux status --name personal
+nested-tmux down --name work
+```
 
 ## Optional YAML initialization
 
@@ -119,20 +149,23 @@ Edit paths and commands for your machine. A node with `children` is a row; a lea
 is a terminal. Leaves without `command` launch the host's default login shell.
 An array launches an executable with literal arguments. A string runs through
 `/bin/sh -c`; use `exec bash -l` at its end if you want an interactive shell
-afterward. Finished commands stay visible until you remove their terminal.
+afterward. A terminal closes when its command finishes.
 
 `cwd` and `env` inherit from the parent. Paths must be absolute or start with
 `~/`; `~` is resolved on the machine that runs the terminal. Crossing to another
 host resets the default cwd to that host's home. `env` is a mapping of strings.
 `title` changes the displayed label without changing the stable `id`. IDs and
-workspace names use letters, digits, underscores, and hyphens. A row must have
-at least one child; remove the whole row to remove its last terminal.
+workspace names use letters, digits, underscores, and hyphens. Initial rows must
+have at least one child; empty rows are removed automatically at runtime.
 
 `name` identifies the workspace within the runtime directory. When its root tmux
 server already exists, **the live tree wins**: editing YAML and running `up`
 again does not undo runtime changes or rerun surviving commands. When the
 controller restarts it reads the tree from the local root server. After a reboot
 or `down`, YAML supplies the initial tree again.
+`--name` overrides the YAML name, so `nested-tmux up work.yaml --name experiment`
+initializes a separate workspace from the same recipe. Subsequent commands can
+select it with `--name experiment` without supplying the YAML file.
 
 ## Edit and export at runtime
 
@@ -240,8 +273,15 @@ nested-tmux up         # Reconnect; recreate missing servers if needed.
 nested-tmux down       # Terminate this workspace, including remote rows.
 ```
 
-These commands use the workspace named `default`. Supply a YAML file after the
-command to select the workspace named by that file.
+These commands use the workspace named `default`. Pass `--name work` to select
+another workspace, or supply a YAML file to use the name in that file. Names
+select independent controllers, local and remote tmux servers, and live trees.
+
+The running controller removes exited terminals and empty branches, including
+over SSH. If you deliberately stop the controller, exited panes are kept until
+you restart it with `up`. A lost connection alone never counts as a terminal exit.
+To pick up a new application version for an existing workspace, run `stop`, then
+`up` or `attach`, with the same `--name`; surviving terminals keep running.
 
 The runtime socket/log directory lives under `$XDG_RUNTIME_DIR` or a private
 `/tmp/nested-tmux-UID` directory. `--runtime-dir /private/path` overrides the base;
@@ -272,7 +312,8 @@ pane/process inventory remains unchanged. In a Nix build, a test-only NSS
 wrapper gives the build user a valid login shell without editing system accounts.
 
 Coverage includes real PTY keyboard input and visible rows, command quoting,
-runtime edits, export and reinitialization, controller restart without duplicate
+runtime edits, named workspace isolation, shell exit and empty-branch cleanup,
+export and reinitialization, controller restart without duplicate
 launches, SSH reconnection, hostile terminal output, forwarding restrictions,
 bounded RPC/control messages, and the installed Nix executable and helpers.
 

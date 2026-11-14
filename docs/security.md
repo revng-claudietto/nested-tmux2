@@ -27,6 +27,7 @@ alias does not create isolation from the same account.
 | Calling the local controller | Unix socket only, private local directory, no listener on TCP, no forwarding or reverse SSH channel. |
 | Asking a parent row to execute a command | Root-local keyboard bindings and a locally held tree. No `TMUX_PARENT`, remote hook, or remote Python agent. |
 | Forging tree structure/host routes | Only the local root's metadata supplies the live tree. Remote replies never become local RPC requests. A remote subtree cannot change host or return to `local`. |
+| Forging terminal exit reports | Reported window IDs are matched only against the reporting row's locally held children. Only exited leaves are removed; unrelated local terminals and other named workspaces are outside that map. Disconnects never trigger removal. |
 | SSH agent/X11/port access | Explicitly disable agent and X11 forwarding, clear configured forwards, and disable SSH escape commands on both control and interactive connections. |
 | Reusing a permissive SSH master | `ControlPath=none`, `ControlMaster=no`, and `ControlPersist=no` prevent inheriting an existing multiplexed connection's forwarding settings. |
 | Local SSH hooks | `PermitLocalCommand=no`; host arguments are validated aliases, not arbitrary SSH options. User-authored ProxyCommand/ProxyJump configuration remains trusted. |
@@ -71,6 +72,9 @@ client configuration attempts agent/X11 forwarding, a local command, a shared
 master socket, and a local port forward; the application overrides prevent
 these. Tests also enable hostile remote clipboard/passthrough output and verify
 that it does not escape the local root or execute displayed shell syntax.
+An SSH exit test closes a remote branch while checking that the local shell's
+process survives. Local tests verify that unavailable rows are retained and
+that edits, detach, and shutdown in one named workspace leave another intact.
 
 Protocol tests cover quoting, response synchronization after errors, bounded
 messages and deadlines, and unknown command outcomes. Local tests check socket

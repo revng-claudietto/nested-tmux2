@@ -19,6 +19,30 @@ class SSHTests(ServiceCase):
         self.addCleanup(server.close)
         return server
 
+    def test_remote_exit_closes_only_its_branch(self):
+        server = self.server()
+        data = fixture()
+        data["root"]["children"][1] = {
+            "id": "remote",
+            "host": "nt-test-host",
+            "children": [{"id": "shell", "command": ["cat"]}],
+        }
+        self.launch(data, server.client_config)
+        local_pid = self.tmux("work", "display-message", "-p", "#{pane_pid}")
+        terminal = self.attach_pty()
+        os.write(terminal, b"\x1b[1;3C\x1b[1;3A")
+        eventually(lambda: request(self.state, "status")["active"] == "work/remote")
+        # Wait for the remote visual connection before sending EOF to cat.
+        os.write(terminal, b"REMOTE_READY\r")
+        eventually(lambda: "REMOTE_READY" in self.tmux("work/remote", "capture-pane", "-p"))
+        os.write(terminal, b"\x04")
+        eventually(lambda: len(request(self.state, "status")["rows"]) == 1)
+        self.assertEqual(request(self.state, "status")["active"], "work")
+        self.assertEqual(self.tmux("work", "display-message", "-p", "#{pane_pid}"), local_pid)
+        self.assertEqual(
+            [n["id"] for n in request(self.state, "dump")["root"]["children"]], ["shell"]
+        )
+
     def test_runtime_remote_row_add_dump_and_remove(self):
         server = self.server()
         self.launch(ssh_config=server.client_config)
