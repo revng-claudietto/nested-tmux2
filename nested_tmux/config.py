@@ -22,7 +22,7 @@ def string(value, where):
 @dataclass(frozen=True)
 class Node:
     path: str
-    title: str
+    title: str | None
     host: str
     cwd: str
     env: dict[str, str]
@@ -53,7 +53,7 @@ def as_data(config):
     def visit(node, parent=None):
         ident = node.path.rsplit("/", 1)[-1]
         result = {"id": ident}
-        if node.title != ident:
+        if node.title is not None:
             result["title"] = node.title
         if node.host != (parent.host if parent else "local"):
             result["host"] = node.host
@@ -104,7 +104,7 @@ def parse(data):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", ident):
             raise Error(f"invalid node id: {ident}")
         path = f"{parent.path}/{ident}" if parent else ident
-        title = string(raw.get("title", ident), f"{path}.title")
+        title = string(raw["title"], f"{path}.title") if "title" in raw else None
         host = string(raw.get("host", parent.host if parent else "local"), f"{path}.host")
         if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.@:-]*", host):
             raise Error(f"{path}: host must be an SSH alias or user@host, not SSH options")

@@ -4,6 +4,20 @@ from nested_tmux.config import Error
 
 
 class TreeTests(TreeCase):
+    def test_explicit_titles_remain_literal_tmux_format_text(self):
+        marker = self.directory / "title-executed"
+        title = f"#{{pane_id}} #(touch {marker})"
+        data = fixture()
+        data["root"]["children"][0]["title"] = title
+        tree = self.build(data)
+        self.assertEqual(self.query("work", "display-message", "-p", "#{window_name}"), [title])
+        tree.rename("work/shell", title + " renamed")
+        tree.prepare()
+        self.assertEqual(
+            self.query("work", "display-message", "-p", "#{window_name}"), [title + " renamed"]
+        )
+        self.assertFalse(marker.exists())
+
     def test_create_navigate_and_restart_without_replaying_commands(self):
         tree = self.build()
         for path in tree.rows:

@@ -15,8 +15,8 @@ file is needed. Run it from a plain terminal, then build your tree as you work:
 5. **Ctrl+a, x** closes the selected terminal or entire branch after confirmation.
 6. **Ctrl+a, d** detaches and keeps everything running. Run the same command to reconnect.
 
-Tabs start at **0** and new shells are named `shell`, `shell-2`, and so on.
-Use **Ctrl+a, A** to rename one.
+Tabs start at **0** and use tmux's automatic names, such as `bash` or `vim`,
+following the foreground program. Use **Ctrl+a, A** to give a tab a fixed name.
 
 To open entirely separate workspaces by name:
 
@@ -154,8 +154,9 @@ afterward. A terminal closes when its command finishes.
 `cwd` and `env` inherit from the parent. Paths must be absolute or start with
 `~/`; `~` is resolved on the machine that runs the terminal. Crossing to another
 host resets the default cwd to that host's home. `env` is a mapping of strings.
-`title` changes the displayed label without changing the stable `id`. IDs and
-workspace names use letters, digits, underscores, and hyphens. Initial rows must
+`title` sets a fixed displayed label without changing the stable `id`. Without
+`title`, terminals use tmux's automatic naming and branches display their IDs.
+IDs and workspace names use letters, digits, underscores, and hyphens. Initial rows must
 have at least one child; empty rows are removed automatically at runtime.
 
 `name` identifies the workspace within the runtime directory. When its root tmux
@@ -192,6 +193,9 @@ Use the keyboard shortcuts for ordinary tab/row creation and removal.
 
 Export includes managed rows and terminals, IDs, titles, hosts, environments,
 configured launch commands, and each terminal's current cwd when available.
+Only explicitly assigned titles are exported; automatic names remain automatic
+when the tree is restored. Generated IDs such as `shell-2` identify terminals
+in CLI paths and YAML independently of their displayed program names.
 Unavailable cwd values fall back to the launch cwd. Export does not recover a
 program manually launched inside an interactive shell, shell variables, process
 memory, scrollback, split panes, or the current selection. It does not discover

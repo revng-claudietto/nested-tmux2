@@ -127,7 +127,7 @@ class Tree:
             "remain-on-exit-format": "",
             "base-index": "0",
             "renumber-windows": "on",
-            "automatic-rename": "off",
+            "automatic-rename": "on",
             "allow-rename": "off",
             "allow-passthrough": "off",
             "set-titles": "off",
@@ -165,11 +165,12 @@ class Tree:
             elif title == "__bootstrap__":
                 bootstrap.append(wid)
         for child in row.node.children:
+            title = child.title or child.path.rsplit("/", 1)[-1]
             wid = existing.get(child.path)
             if wid is None:
                 if bootstrap:
                     wid = bootstrap.pop(0)
-                    ctl.call("rename-window", "-t", wid, child.title)
+                    ctl.call("rename-window", "-t", wid, title.replace("#", "##"))
                 else:
                     wid = ctl.call(
                         "new-window",
@@ -178,7 +179,7 @@ class Tree:
                         "-F",
                         "#{window_id}",
                         "-n",
-                        child.title,
+                        title.replace("#", "##"),
                         "-c",
                         row.node.cwd if child.branch else child.cwd,
                         "sleep 2147483647",
@@ -187,6 +188,7 @@ class Tree:
             row.windows[child.path] = wid
             ready = ctl.call("show-options", "-wqv", "-t", wid, "@nt-ready")
             if ready == ["1"]:
+                self._window_name(row, child, wid)
                 continue
             if ready == ["starting"]:
                 raise Error(
@@ -221,12 +223,24 @@ class Tree:
                 ctl.call("set-option", "-wu", "-t", wid, "@nt-ready")
                 raise
             ctl.call("set-option", "-w", "-t", wid, "@nt-ready", "1")
+            self._window_name(row, child, wid)
         if bootstrap:
             ctl.call("select-window", "-t", row.windows[row.node.children[0].path])
             for wid in bootstrap:
                 ctl.call("kill-window", "-t", wid)
         # Also repair numbering in a workspace created by an older controller.
         ctl.call("move-window", "-r", "-t", "tree:")
+
+    @staticmethod
+    def _window_name(row, child, wid):
+        if child.branch or child.title is not None:
+            title = child.title or child.path.rsplit("/", 1)[-1]
+            # Native rename-window also disables automatic naming for this tab.
+            row.control.call("rename-window", "-t", wid, title.replace("#", "##"))
+        else:
+            # Use tmux's own default format and process detection on this host.
+            # allow-rename stays off: terminal escape sequences cannot rename it.
+            row.control.call("set-option", "-w", "-t", wid, "automatic-rename", "on")
 
     def _bridge(self, parent, child):
         args = [
@@ -461,6 +475,11 @@ class Tree:
         exited = []
         for path, row in list(self.rows.items()):
             try:
+                # tmux normally refreshes names on pane output. A quiet exec
+                # can leave the launcher shell's name behind; re-arm native
+                # naming so tmux observes it even without terminal output.
+                # Explicitly named windows have their own off override.
+                row.control.call("set-option", "-g", "automatic-rename", "on", timeout=2)
                 panes = row.control.call(
                     "list-panes",
                     "-s",
@@ -500,7 +519,7 @@ class Tree:
         config = parse(data)
         self._metadata(config)
         row = self.rows[self.parents[path]]
-        row.control.call("rename-window", "-t", row.windows[path], title)
+        row.control.call("rename-window", "-t", row.windows[path], title.replace("#", "##"))
         self._install_config(config)
         self._save_metadata()
         return self.status()

@@ -110,6 +110,53 @@ class ServiceCase(TreeCase):
 
 
 class ServiceTests(ServiceCase):
+    def test_native_automatic_names_and_manual_rename_survive_restart(self):
+        data = fixture()
+        data["root"]["children"][0] = {"id": "shell"}
+        self.launch(data)
+        terminal = self.attach_pty()
+        shell_name = self.tmux("work", "display-message", "-p", "#{pane_current_command}")
+        eventually(
+            lambda: self.tmux("work", "display-message", "-p", "#{window_name}") == shell_name
+        )
+        self.assertNotIn("title", request(self.state, "dump")["root"]["children"][0])
+        # Existing generated labels migrate without restarting the shell.
+        before = self.tmux("work", "display-message", "-p", "#{pane_pid}")
+        self.tmux("work", "rename-window", "shell-2")
+        request(self.state, "reconcile")
+        eventually(
+            lambda: self.tmux("work", "display-message", "-p", "#{window_name}") == shell_name
+        )
+        self.assertEqual(self.tmux("work", "display-message", "-p", "#{pane_pid}"), before)
+        os.write(terminal, b"sleep 30\r")
+        eventually(lambda: self.tmux("work", "display-message", "-p", "#{window_name}") == "sleep")
+        os.write(terminal, b"\x03")
+        eventually(
+            lambda: self.tmux("work", "display-message", "-p", "#{window_name}") == shell_name
+        )
+        # A manual name equal to the node ID must still remain explicit in YAML.
+        os.write(terminal, b"\x01A")
+        eventually(lambda: b"New title:" in self.output)
+        os.write(terminal, b"shell\r")
+        eventually(
+            lambda: request(self.state, "dump")["root"]["children"][0].get("title") == "shell"
+        )
+        time.sleep(0.2)  # Allow the popup helper to exit before typing again.
+        os.write(terminal, b"sleep 30\r")
+        eventually(
+            lambda: self.tmux("work", "display-message", "-p", "#{pane_current_command}") == "sleep"
+        )
+        self.assertEqual(self.tmux("work", "display-message", "-p", "#{window_name}"), "shell")
+        request(self.state, "stop")
+        eventually(lambda: not (self.state / "rpc.sock").exists())
+        self.status = start(self.config, self.config_path, self.state, None)
+        self.assertEqual(self.tmux("work", "display-message", "-p", "#{window_name}"), "shell")
+        self.assertEqual(self.tmux("work", "show-options", "-wv", "automatic-rename"), "off")
+        self.assertEqual(request(self.state, "dump")["root"]["children"][0]["title"], "shell")
+        self.assertEqual(
+            self.tmux("work", "display-message", "-p", "-t", "tree:1", "#{window_name}"), "project"
+        )
+
     def test_no_yaml_start_edit_export_and_restart(self):
         from nested_tmux.runtime import launcher
 
@@ -136,15 +183,21 @@ class ServiceTests(ServiceCase):
         self.assertEqual(
             self.tmux("work", "display-message", "-p", "#{pane_current_path}"), str(self.directory)
         )
-        self.assertEqual(
-            self.tmux("work", "list-windows", "-F", "#{window_index}:#{window_name}"), "0:shell"
+        shell_name = self.tmux("work", "display-message", "-p", "#{pane_current_command}")
+        eventually(
+            lambda: (
+                self.tmux("work", "list-windows", "-F", "#{window_index}:#{window_name}")
+                == f"0:{shell_name}"
+            )
         )
         self.assertEqual(self.tmux("work", "show-options", "-gv", "status-left"), "[default]")
         os.write(terminal, b"\x14")
         eventually(lambda: len(request(self.state, "status")["rows"][0]["windows"]) == 2)
-        self.assertEqual(
-            self.tmux("work", "list-windows", "-F", "#{window_index}:#{window_name}"),
-            "0:shell\n1:shell-2",
+        eventually(
+            lambda: (
+                self.tmux("work", "list-windows", "-F", "#{window_index}:#{window_name}")
+                == f"0:{shell_name}\n1:{shell_name}"
+            )
         )
 
         def cli(*args):
@@ -261,7 +314,7 @@ class ServiceTests(ServiceCase):
             {"XDG_RUNTIME_DIR": str(self.directory)},
             self.directory,
         )
-        eventually(lambda: b"shell" in self.output)
+        eventually(lambda: b"[beta]" in self.output)
         os.write(terminal, b"\x01d")
         eventually(lambda: self.attachment.poll() is not None)
         self.assertEqual(self.attachment.returncode, 0)

@@ -71,6 +71,13 @@ Adding/removing nodes changes live metadata. Dumping exports that tree with
 best-effort cwd observations. It preserves the configured command, rather than
 guessing how to reconstruct an arbitrary running process. No restore plugin or
 shell-history scraping is involved. Node IDs remain stable when titles change.
+Leaves without an explicit title enable tmux's native `automatic-rename`, with
+its default format and process detection on the host running that leaf. Branch
+names and explicitly assigned titles stay fixed. Export records explicit titles
+even when they equal the node ID, and omits automatic program names so they
+remain automatic after restoration. Maintenance re-arms native naming so quiet
+commands also update after replacing their launcher shell; no process naming
+algorithm is implemented in Python.
 
 This is not a transactional distributed system: an SSH failure midway through
 an edit can leave part of the requested tree created. The recorded intent lets

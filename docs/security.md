@@ -32,7 +32,7 @@ alias does not create isolation from the same account.
 | Reusing a permissive SSH master | `ControlPath=none`, `ControlMaster=no`, and `ControlPersist=no` prevent inheriting an existing multiplexed connection's forwarding settings. |
 | Local SSH hooks | `PermitLocalCommand=no`; host arguments are validated aliases, not arbitrary SSH options. User-authored ProxyCommand/ProxyJump configuration remains trusted. |
 | Command or format injection | Distinct tmux-token and shell-argument encoding; stable locally generated socket names; no shell evaluation of remote replies. Reject tmux format introducers in cwd. |
-| Terminal clipboard or passthrough sequences | Local root `set-clipboard=off`, `get-clipboard=off` where supported, and `allow-passthrough=off`; automatic titles/renaming disabled. Child settings also default to these values. |
+| Terminal clipboard, passthrough, or rename sequences | Local root `set-clipboard=off`, `get-clipboard=off` where supported, `allow-passthrough=off`, `allow-rename=off`, and `set-titles=off`. Child settings also default to these values. Native process-based naming is enabled only for leaves without an explicit title; branch labels remain fixed. |
 | Malformed/flooded control data | Response framing, bounded lines, bounded reply size and queue, command deadlines, sanitized CLI diagnostics; overflow/disconnect closes the stream. |
 | Replaying a command after a lost acknowledgement | Mark startup before launch; retain the uncertain state and refuse automatic replay. |
 

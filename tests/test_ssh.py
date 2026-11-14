@@ -60,6 +60,9 @@ class SSHTests(ServiceCase):
         self.status = request(
             self.state, "add", parent="work/remote", node={"id": "job", "command": ["cat"]}
         )
+        eventually(
+            lambda: self.tmux("work/remote", "display-message", "-p", "#{window_name}") == "cat"
+        )
         self.assertEqual(
             self.tmux("work/remote", "display-message", "-p", "#{pane_current_path}"),
             str(self.directory),
@@ -67,6 +70,7 @@ class SSHTests(ServiceCase):
         exported = request(self.state, "dump")["root"]["children"][-1]
         self.assertEqual(exported["host"], "nt-test-host")
         self.assertEqual(exported["children"][-1]["command"], ["cat"])
+        self.assertNotIn("title", exported["children"][-1])
         self.status = request(self.state, "remove", path="work/remote")
         self.assertNotIn("work/remote", [row["path"] for row in self.status["rows"]])
 
@@ -197,7 +201,10 @@ class SSHTests(ServiceCase):
         # A remote tmux server may be compromised and enable its own passthrough.
         self.tmux("work/project", "set-option", "-g", "allow-passthrough", "on")
         self.tmux("work/project", "set-option", "-s", "set-clipboard", "on")
-        hostile = "\033]52;c;SE9TVElMRQ==\a\033Ptmux;\033\033]52;c;SE9TVElMRQ==\a\033\\"
+        hostile = (
+            "\033]52;c;SE9TVElMRQ==\a\033Ptmux;\033\033]52;c;SE9TVElMRQ==\a\033\\"
+            "\033Ptmux;\033\033kFORGED_NAME\033\033\\\033\\"
+        )
         payload = f"printf '%s' {shlex.quote(hostile)}; printf '%s\\n' {shlex.quote('$(touch ' + str(marker) + ')')}; sleep 30"
         self.tmux("work/project", "respawn-pane", "-k", "-t", "tree:", payload)
         eventually(lambda: "$(touch" in self.tmux("work", "capture-pane", "-p"))
@@ -205,4 +212,6 @@ class SSHTests(ServiceCase):
         self.assertNotIn(b"SE9TVElMRQ==", self.output)
         self.assertEqual(self.tmux("work", "show-options", "-sv", "set-clipboard"), "off")
         self.assertEqual(self.tmux("work", "show-options", "-gv", "allow-passthrough"), "off")
+        self.assertEqual(self.tmux("work", "show-options", "-gv", "allow-rename"), "off")
+        self.assertEqual(self.tmux("work", "display-message", "-p", "#{window_name}"), "project")
         self.assertEqual(request(self.state, "status")["active"], "work")

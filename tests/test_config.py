@@ -4,10 +4,28 @@ from pathlib import Path
 
 from helpers import fixture
 
-from nested_tmux.config import Error, load, parse
+from nested_tmux.config import Error, as_data, load, parse
 
 
 class ConfigTests(unittest.TestCase):
+    def test_export_preserves_automatic_and_explicit_titles(self):
+        data = {
+            "name": "names",
+            "root": {
+                "id": "work",
+                "children": [
+                    {"id": "automatic"},
+                    {"id": "fixed", "title": "fixed"},
+                    {"id": "branch", "children": [{"id": "shell"}]},
+                ],
+            },
+        }
+        config = parse(data)
+        exported = as_data(config)
+        self.assertNotIn("title", exported["root"]["children"][0])
+        self.assertEqual(exported["root"]["children"][1]["title"], "fixed")
+        self.assertEqual(parse(exported).root, config.root)
+
     def test_inheritance_and_remote_home(self):
         data = fixture("/tmp/local")
         data["root"]["env"] = {"BUILD": "debug"}
@@ -23,6 +41,7 @@ class ConfigTests(unittest.TestCase):
         cases = [
             {"id": "x", "children": []},
             {"id": "x", "cwd": "relative"},
+            {"id": "x", "title": None},
             {"id": "x", "command": []},
             {"id": "x", "command": 1},
             {"id": "x", "command": [""]},

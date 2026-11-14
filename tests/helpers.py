@@ -27,16 +27,16 @@ def fixture(cwd="/tmp"):
             "id": "work",
             "cwd": cwd,
             "children": [
-                {"id": "shell", "command": ["cat"]},
+                {"id": "shell", "title": "shell", "command": ["cat"]},
                 {
                     "id": "project",
                     "children": [
-                        {"id": "edit", "command": ["cat"]},
+                        {"id": "edit", "title": "edit", "command": ["cat"]},
                         {
                             "id": "build",
                             "children": [
-                                {"id": "one", "command": ["cat"]},
-                                {"id": "two", "command": ["cat"]},
+                                {"id": "one", "title": "one", "command": ["cat"]},
+                                {"id": "two", "title": "two", "command": ["cat"]},
                             ],
                         },
                     ],
