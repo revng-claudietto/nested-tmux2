@@ -19,8 +19,8 @@ To open an SSH branch, focus a local row and press **Ctrl+a, Ctrl+r**. Enter a
 branch name, an SSH host alias, and an optional remote directory (default `~`).
 See the SSH setup instructions below for authentication and host-key setup.
 
-Tabs start at **0** and use tmux's automatic names, such as `bash` or `vim`,
-following the foreground program. Use **Ctrl+a, A** to give a tab a fixed name.
+Tabs start at **0** and display their node ID by default, such as `shell` or
+`editor`. Use **Ctrl+a, A** or YAML `title` to give a tab a different name.
 
 To open entirely separate workspaces by name:
 
@@ -188,7 +188,8 @@ strings. Duplicate keys, non-string mapping keys, and custom tags are rejected.
 `~/`; `~` is resolved on the machine that runs the terminal. Crossing to another
 host resets the default cwd to that host's home. `env` is a mapping of strings.
 `title` sets a fixed displayed label without changing the stable `id`. Without
-`title`, terminals use tmux's automatic naming and branches display their IDs.
+`title`, both terminals and branches display their IDs. Names stay fixed when
+the foreground program changes.
 IDs and workspace names use letters, digits, underscores, and hyphens. Initial rows must
 have at least one child; empty rows are removed automatically at runtime.
 
@@ -269,9 +270,9 @@ Export includes managed rows and terminals, IDs, titles, hosts, environments,
 configured launch commands, and each terminal's current cwd when available.
 This includes all managed remote branches: their SSH host aliases and cwd values
 queried from tmux on the remote host.
-Only explicitly assigned titles are exported; automatic names remain automatic
+Only explicitly assigned titles are exported; omitted titles default to the ID
 when the tree is restored. Generated IDs such as `shell-2` identify terminals
-in CLI paths and YAML independently of their displayed program names.
+in CLI paths and YAML, and supply their default displayed names.
 Unavailable cwd values fall back to the launch cwd. Export does not recover a
 program manually launched inside an interactive shell, shell variables, process
 memory, scrollback, split panes, or the current selection. It does not discover

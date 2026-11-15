@@ -103,7 +103,7 @@ class SSHTests(ServiceCase):
             self.state, "add", parent="work/remote", node={"id": "job", "command": ["cat"]}
         )
         eventually(
-            lambda: self.tmux("work/remote", "display-message", "-p", "#{window_name}") == "cat"
+            lambda: self.tmux("work/remote", "display-message", "-p", "#{window_name}") == "job"
         )
         self.assertEqual(
             self.tmux("work/remote", "display-message", "-p", "#{pane_current_path}"),

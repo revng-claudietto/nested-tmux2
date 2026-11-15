@@ -140,7 +140,7 @@ class Tree:
             "remain-on-exit-format": "",
             "base-index": "0",
             "renumber-windows": "on",
-            "automatic-rename": "on",
+            "automatic-rename": "off",
             "allow-rename": "off",
             "allow-passthrough": "off",
             "set-titles": "off",
@@ -258,14 +258,9 @@ class Tree:
 
     @staticmethod
     def _window_name(row, child, wid):
-        if child.branch or child.title is not None:
-            title = child.title or child.path.rsplit("/", 1)[-1]
-            # Native rename-window also disables automatic naming for this tab.
-            row.control.call("rename-window", "-t", wid, title.replace("#", "##"))
-        else:
-            # Use tmux's own default format and process detection on this host.
-            # allow-rename stays off: terminal escape sequences cannot rename it.
-            row.control.call("set-option", "-w", "-t", wid, "automatic-rename", "on")
+        title = child.title or child.path.rsplit("/", 1)[-1]
+        # Native rename-window also disables automatic naming for this tab.
+        row.control.call("rename-window", "-t", wid, title.replace("#", "##"))
 
     def _bridge(self, parent, child):
         args = [
@@ -563,11 +558,6 @@ class Tree:
         exited = []
         for path, row in list(self.rows.items()):
             try:
-                # tmux normally refreshes names on pane output. A quiet exec
-                # can leave the launcher shell's name behind; re-arm native
-                # naming so tmux observes it even without terminal output.
-                # Explicitly named windows have their own off override.
-                row.control.call("set-option", "-g", "automatic-rename", "on", timeout=2)
                 panes = row.control.call(
                     "list-panes",
                     "-s",

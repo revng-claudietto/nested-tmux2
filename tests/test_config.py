@@ -8,13 +8,13 @@ from nested_tmux.config import Error, as_data, load, parse
 
 
 class ConfigTests(unittest.TestCase):
-    def test_export_preserves_automatic_and_explicit_titles(self):
+    def test_export_preserves_omitted_and_explicit_titles(self):
         data = {
             "name": "names",
             "root": {
                 "id": "work",
                 "children": [
-                    {"id": "automatic"},
+                    {"id": "default-title"},
                     {"id": "fixed", "title": "fixed"},
                     {"id": "branch", "children": [{"id": "shell"}]},
                 ],

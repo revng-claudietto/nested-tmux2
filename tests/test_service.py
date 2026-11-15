@@ -184,30 +184,32 @@ class ServiceTests(ServiceCase):
         self.status = json.loads(cli("up"))
         self.assertEqual(len(self.status["rows"][0]["windows"]), 2)
 
-    def test_native_automatic_names_and_manual_rename_survive_restart(self):
+    def test_id_default_titles_and_manual_rename_survive_restart(self):
         data = fixture()
         data["root"]["children"][0] = {"id": "shell"}
         self.launch(data)
         terminal = self.attach_pty()
-        shell_name = self.tmux("work", "display-message", "-p", "#{pane_current_command}")
-        eventually(
-            lambda: self.tmux("work", "display-message", "-p", "#{window_name}") == shell_name
-        )
+        self.assertEqual(self.tmux("work", "display-message", "-p", "#{window_name}"), "shell")
         self.assertNotIn("title", request(self.state, "dump")["root"]["children"][0])
-        # Existing generated labels migrate without restarting the shell.
+        # Existing automatic program names migrate without restarting the shell.
         before = self.tmux("work", "display-message", "-p", "#{pane_pid}")
-        self.tmux("work", "rename-window", "shell-2")
+        self.tmux("work", "rename-window", "bash")
+        self.tmux("work", "set-option", "-w", "automatic-rename", "on")
         request(self.state, "reconcile")
-        eventually(
-            lambda: self.tmux("work", "display-message", "-p", "#{window_name}") == shell_name
-        )
+        eventually(lambda: self.tmux("work", "display-message", "-p", "#{window_name}") == "shell")
         self.assertEqual(self.tmux("work", "display-message", "-p", "#{pane_pid}"), before)
         os.write(terminal, b"sleep 30\r")
-        eventually(lambda: self.tmux("work", "display-message", "-p", "#{window_name}") == "sleep")
-        os.write(terminal, b"\x03")
         eventually(
-            lambda: self.tmux("work", "display-message", "-p", "#{window_name}") == shell_name
+            lambda: self.tmux("work", "display-message", "-p", "#{pane_current_command}") == "sleep"
         )
+        self.assertEqual(self.tmux("work", "display-message", "-p", "#{window_name}"), "shell")
+        self.assertEqual(self.tmux("work", "show-options", "-wv", "automatic-rename"), "off")
+        os.write(terminal, b"\x03")
+        request(self.state, "stop")
+        eventually(lambda: not (self.state / "rpc.sock").exists())
+        self.status = start(self.config, self.config_path, self.state, None)
+        self.assertEqual(self.tmux("work", "display-message", "-p", "#{window_name}"), "shell")
+        self.assertEqual(self.tmux("work", "display-message", "-p", "#{pane_pid}"), before)
         # A manual name equal to the node ID must still remain explicit in YAML.
         os.write(terminal, b"\x01A")
         eventually(lambda: b"New title:" in self.output)
@@ -257,11 +259,10 @@ class ServiceTests(ServiceCase):
         self.assertEqual(
             self.tmux("work", "display-message", "-p", "#{pane_current_path}"), str(self.directory)
         )
-        shell_name = self.tmux("work", "display-message", "-p", "#{pane_current_command}")
         eventually(
             lambda: (
                 self.tmux("work", "list-windows", "-F", "#{window_index}:#{window_name}")
-                == f"0:{shell_name}"
+                == "0:shell"
             )
         )
         self.assertEqual(self.tmux("work", "show-options", "-gv", "status-left"), "")
@@ -270,7 +271,7 @@ class ServiceTests(ServiceCase):
         eventually(
             lambda: (
                 self.tmux("work", "list-windows", "-F", "#{window_index}:#{window_name}")
-                == f"0:{shell_name}\n1:{shell_name}"
+                == "0:shell\n1:shell-2"
             )
         )
 
