@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -85,14 +86,88 @@ def workspace_name(value):
     return name
 
 
-def discover(name):
-    """Find a workspace recipe in XDG precedence order, never in the cwd."""
-    workspace_name(name)  # Validate before constructing a filesystem path.
+def config_home():
     home = Path(os.environ.get("XDG_CONFIG_HOME", ""))
     if not home.is_absolute():
         home = Path.home() / ".config"
+    return home
+
+
+def add_nodes(saved, live):
+    """Preserve saved launch intent; append live nodes missing at each tree path."""
+    if saved["id"] != live["id"]:
+        raise Error("saved and live root IDs differ; use save --replace to replace the recipe")
+    if ("children" in saved) != ("children" in live):
+        raise Error(
+            f"{saved['id']}: terminal/row conflict; use save --replace to replace the recipe"
+        )
+    if "children" not in saved:
+        return saved
+    current = {node["id"]: node for node in live["children"]}
+    children = [
+        add_nodes(node, current[node["id"]]) if node["id"] in current else node
+        for node in saved["children"]
+    ]
+    known = {node["id"] for node in saved["children"]}
+    children.extend(node for node in live["children"] if node["id"] not in known)
+    return {**saved, "children": children}
+
+
+def save(data, *, name, replace=False, source=None):
+    """Atomically persist a live tree as a private user startup recipe."""
+    workspace_name(name)
+    directory = config_home() / "nested-tmux2"
+    destination = directory / f"{name}.yaml"
+    data = {**data, "name": name}
+    if not replace:
+        # Prefer the recipe being updated; otherwise seed from the selected
+        # explicit/system/.yml recipe without modifying that source file.
+        if destination.exists() or destination.is_symlink():
+            source = destination
+        elif source is None:
+            source = discover(name)
+        if source is not None:
+            saved = read_data(source)
+            if isinstance(saved, dict):
+                saved = {**saved, "name": name}
+            saved_config = parse(saved)
+            saved_hosts = {node.path: node.host for node in saved_config.root.walk()}
+            for node in parse(data).root.walk():
+                if node.path in saved_hosts and saved_hosts[node.path] != node.host:
+                    raise Error(
+                        f"{node.path}: saved and live hosts differ; "
+                        "use save --replace to replace the recipe"
+                    )
+            data = {**saved, "root": add_nodes(saved["root"], data["root"])}
+    parse(data)  # Check the merged tree before touching the destination.
+    contents = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=directory, prefix=f".{name}-", delete=False
+        ) as output:
+            temporary = Path(output.name)
+            output.write(contents)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, destination)
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return destination
+
+
+def discover(name):
+    """Find a workspace recipe in XDG precedence order, never in the cwd."""
+    workspace_name(name)  # Validate before constructing a filesystem path.
     directories = [
-        home,
+        config_home(),
         *map(Path, (os.environ.get("XDG_CONFIG_DIRS") or "/etc/xdg").split(os.pathsep)),
     ]
     for directory in directories:
@@ -198,7 +273,7 @@ def parse(data):
     return Config(name, root, hashlib.sha256(canonical.encode()).hexdigest())
 
 
-def load(path, *, name=None):
+def read_data(path):
     path = Path(path)
     try:
 
@@ -220,9 +295,13 @@ def load(path, *, name=None):
         Loader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
         if path.stat().st_size > 1024 * 1024:
             raise Error("configuration is larger than 1 MiB")
-        data = yaml.load(path.read_text(), Loader=Loader)
-        if name is not None and isinstance(data, dict):
-            data = {**data, "name": name}
-        return parse(data)
+        return yaml.load(path.read_text(), Loader=Loader)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         raise Error(f"{path}: {exc}") from exc
+
+
+def load(path, *, name=None):
+    data = read_data(path)
+    if name is not None and isinstance(data, dict):
+        data = {**data, "name": name}
+    return parse(data)

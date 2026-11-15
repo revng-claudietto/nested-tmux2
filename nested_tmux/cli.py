@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 
-from .config import Error, discover, load, parse
+from .config import Error, discover, load, parse, save
 from .control import clean_env
 from .runtime import Tree, launcher
 from .service import private_directory, request, serve, state_path
@@ -68,7 +68,7 @@ def main(argv=None):
         parents=[selector],
     )
     sub = parser.add_subparsers(dest="op", required=True)
-    for op in ("up", "attach", "status", "down", "stop", "check", "dump", "_serve"):
+    for op in ("up", "attach", "status", "down", "stop", "check", "dump", "save", "_serve"):
         p = sub.add_parser(op, parents=[selector])
         p.add_argument(
             "config",
@@ -82,6 +82,12 @@ def main(argv=None):
             p.add_argument("--attach", action="store_true")
         if op == "dump":
             p.add_argument("-o", "--output", type=Path)
+        if op == "save":
+            p.add_argument(
+                "--replace",
+                action="store_true",
+                help="replace the saved recipe with the live tree instead of only adding new nodes",
+            )
     for op in ("add-terminal", "add-row", "remove", "rename"):
         p = sub.add_parser(op, parents=[selector])
         p.add_argument(
@@ -146,7 +152,9 @@ def main(argv=None):
         config_path = args.config
         if config_path is None:
             name = name if name is not None else "default"
-            config_path = discover(name)
+            # Saving needs only the live workspace, even if its old recipe is broken.
+            if args.op != "save":
+                config_path = discover(name)
         config = (
             load(config_path, name=name)
             if config_path is not None
@@ -193,6 +201,15 @@ def main(argv=None):
             result = request(state, "remove", path=args.path)
         elif args.op == "rename":
             result = request(state, "rename", path=args.path, title=args.title)
+        elif args.op == "save":
+            path = save(
+                request(state, "dump"),
+                name=config.name,
+                replace=args.replace,
+                source=config_path,
+            )
+            print(f"Saved {path}")
+            return 0
         elif args.op == "dump":
             result = yaml.safe_dump(request(state, "dump"), sort_keys=False, allow_unicode=True)
             if args.output:

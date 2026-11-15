@@ -199,17 +199,45 @@ select it with `--name experiment` without supplying the YAML file.
 
 ## Edit and export at runtime
 
-To use the current tree as the next startup recipe for a named workspace:
+To save the current tree as the next startup recipe for a named workspace:
 
 ```sh
-mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/nested-tmux2"
-nix run github:revng-claudietto/nested-tmux2 -- dump --name work \
-  -o "${XDG_CONFIG_HOME:-$HOME/.config}/nested-tmux2/work.yaml"
+nix run github:revng-claudietto/nested-tmux2 -- save --name work
 ```
 
-To save a workspace you built by hand:
+`save` creates `$XDG_CONFIG_HOME/nested-tmux2/<name>.yaml` (default
+`~/.config/nested-tmux2/<name>.yaml`) and prints its path. Omit `--name` to save
+`default.yaml`.
+
+By default, saving is **additive**: existing nodes keep their saved settings
+(including startup commands, cwd, environment, and titles), and new nodes are
+appended within each row, matched by stable IDs. Closed nodes remain in the recipe;
+existing order is preserved. New nodes inherit the saved parent settings unless
+their export explicitly overrides them. Matching nodes with different hosts or
+terminal/row types, or different root IDs, report a conflict without changing the file.
+Invalid existing recipes also report an error.
+
+To replace the recipe with the live export, including removals and updated settings:
 
 ```sh
+nix run github:revng-claudietto/nested-tmux2 -- save --name work --replace
+```
+
+Both policies write atomically using a private file
+(mode `0600`), creating the directory if needed. A destination symlink is replaced;
+its target is untouched. It always writes the user `.yaml` file, even if the
+workspace was initialized from `.yml`, a system recipe, or an explicit path.
+If the destination does not exist, additive saving merges with the discovered
+recipe, or the explicit recipe passed as `save recipe.yaml`. Source files at
+other paths are untouched. YAML comments and formatting are not retained.
+
+After reboot, launch with the same `--name` to recreate the saved tree. Runtime
+edits are saved only when you run `save` or `dump`; there is no automatic save.
+
+`dump` writes YAML to stdout, or to a chosen file with `-o`:
+
+```sh
+nix run github:revng-claudietto/nested-tmux2 -- dump
 nix run github:revng-claudietto/nested-tmux2 -- dump -o saved-work.yaml
 ```
 
@@ -240,7 +268,7 @@ program manually launched inside an interactive shell, shell variables, process
 memory, scrollback, split panes, or the current selection. It does not discover
 tabs created using unmanaged native tmux commands. Use the provided keys/CLI
 for changes you want to export. Keep exported files private if `env` or commands
-contain secrets; they are written as ordinary files subject to your umask.
+contain secrets; `dump -o` files follow your umask, while `save` uses mode `0600`.
 
 Run `up saved-work.yaml` after reboot to initialize from the exported tree.
 It retains the same workspace name, so it attaches to the existing workspace

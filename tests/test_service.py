@@ -125,7 +125,7 @@ class ServiceCase(TreeCase):
 
 
 class ServiceTests(ServiceCase):
-    def test_discovered_recipe_start_dump_and_live_tree_restart(self):
+    def test_discovered_recipe_start_save_and_live_tree_restart(self):
         from nested_tmux.runtime import launcher
 
         config_home = self.directory / "config"
@@ -172,7 +172,7 @@ class ServiceTests(ServiceCase):
         )
         cli("add-terminal", "extra", "--command", "cat")
         before = self.tmux("desk", "list-panes", "-a", "-F", "#{pane_pid}")
-        cli("dump", "-o", str(recipe))
+        self.assertEqual(cli("save"), f"Saved {recipe}\n")
         self.assertEqual(load(recipe).name, "work")
         self.assertEqual(len(load(recipe).root.children), 2)
         cli("stop")
