@@ -9,7 +9,7 @@ servers. A leaf window runs the user's command.
 ```mermaid
 flowchart LR
     K[Keyboard] --> R[Local root tmux]
-    R -- run-shell --> H[Short-lived local Python helper]
+    R -- run-shell --> H[Small local C helper]
     H -- private Unix socket RPC --> C[Persistent local Python daemon]
     C -- tmux control mode --> L[Local child rows]
     C -- outbound SSH: control mode --> S[Remote tmux rows]
@@ -25,20 +25,22 @@ user's existing tmux sessions and configuration.
 
 There is one long-running Python daemon per named workspace. It owns the live
 tree and keeps one `tmux -C` process connected to each row, using persistent SSH
-connections for remote rows. A navigation binding starts a short-lived local
-Python helper, which sends an action such as `right` to the daemon's Unix socket,
-waits for the reply, and exits. The daemon translates that action into tmux
+connections for remote rows. A navigation binding starts `nested-tmux-key`, a
+small C executable that sends an action such as `right` to the daemon's Unix
+socket, waits for acknowledgement, and exits. The daemon translates it into tmux
 commands such as `next-window -t tree` and writes them to the existing control
 process's stdin; framed replies arrive on stdout. Ordinary typing and terminal
 rendering go through tmux directly. Native bindings such as detach also stay in
 tmux. The remote host needs tmux and SSH, with no Python daemon installed there.
 
-Starting a Python helper for each navigation action adds interpreter/import
-overhead. The controller and its tmux/SSH connections are reused, so navigation
-does not relaunch the daemon or establish a new SSH connection. Remote round
-trips and serialized controller work can add latency, especially for operations
-that query several rows. A small dedicated socket client could reduce helper
-startup cost without changing the controller protocol.
+Nix builds the helper with the C compiler and links only libc. Bindings record
+its absolute path. It starts a process for each shortcut, with no Python
+interpreter/import cost. Interactive creation/rename prompts and the general
+CLI remain in Python. Source and pip installations fall back to the Python
+helper if `nested-tmux-key` is absent from PATH when the controller prepares its
+bindings. The controller and its tmux/SSH connections are reused. Remote round
+trips and serialized controller work still add latency, especially for operations
+that query several rows. See the [navigation measurements](performance.md).
 
 ## Why these interfaces
 
@@ -46,6 +48,14 @@ The application exposes a small JSON protocol on a mode-0600 Unix socket inside
 a mode-0700 directory. Key bindings invoke a local helper that writes to this
 socket. Operations are serialized, so concurrent shortcuts do not interleave
 tmux commands or update the tree concurrently.
+
+The native helper accepts only the fixed keyboard actions. It sends one JSON
+request with `op: key` and receives a compact ASCII `OK` or `ERR` line; the
+general CLI still receives JSON. Replies are bounded at 4 KiB, diagnostics are
+sanitized, and a monotonic 30-second deadline covers connection, writes, and
+reads. Partial I/O is handled explicitly. A missing acknowledgement leaves the
+action's outcome unknown; the helper never retries a mutation. This path uses
+the same private local socket and adds no remote control endpoint.
 
 For tmux itself, use its documented [control mode](https://github.com/tmux/tmux/wiki/Control-Mode)
 through a persistent `tmux -C` subprocess. This gives commands and framed replies

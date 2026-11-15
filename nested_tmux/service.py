@@ -100,6 +100,7 @@ def serve(config, state, ssh_config=None):
                 continue
             with client:
                 client.settimeout(2)
+                keyboard = False
                 try:
                     with client.makefile("rb") as stream:
                         line = stream.readline(MAX_REQUEST + 1)
@@ -109,9 +110,10 @@ def serve(config, state, ssh_config=None):
                     if not isinstance(message, dict):
                         raise Error("RPC request must be an object")
                     op = message.get("op")
+                    keyboard = op == "key"
                     if op == "status":
                         result = tree.status()
-                    elif op == "nav":
+                    elif op in {"nav", "key"}:
                         result = tree.navigate(message.get("action"))
                     elif op == "reconcile":
                         tree.prepare()
@@ -131,11 +133,19 @@ def serve(config, state, ssh_config=None):
                         running, result = False, {"stopped": True}
                     else:
                         raise Error("unknown RPC operation")
-                    response = {"result": result}
+                    response = (
+                        b"OK\n" if keyboard else json.dumps({"result": result}).encode() + b"\n"
+                    )
                 except (Error, ValueError, OSError, TypeError, subprocess.TimeoutExpired) as exc:
-                    response = {"error": str(exc)}
+                    if keyboard:
+                        # Small ASCII frames keep the native client free of JSON parsing.
+                        # Remote diagnostics must never become terminal escape sequences.
+                        detail = "".join(c if 32 <= ord(c) < 127 else "?" for c in str(exc))[:1024]
+                        response = ("ERR " + (detail or "operation failed") + "\n").encode()
+                    else:
+                        response = json.dumps({"error": str(exc)}).encode() + b"\n"
                 try:
-                    client.sendall(json.dumps(response).encode() + b"\n")
+                    client.sendall(response)
                 except OSError:
                     pass
     finally:

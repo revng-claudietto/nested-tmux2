@@ -53,8 +53,8 @@ through a private Unix socket and tmux control mode.
 ## Run
 
 The flake pins **nixos-unstable** in `flake.lock` and includes Python, PyYAML, tmux,
-and OpenSSH. Linux on x86_64 and aarch64 is supported by the flake; the test run
-used x86_64. From this directory:
+OpenSSH, and a small native keyboard helper. Linux on x86_64 and aarch64 is
+supported by the flake; the test run used x86_64. From this directory:
 
 ```sh
 nix run path:.
@@ -64,6 +64,11 @@ Alternatively, install with `python3 -m pip install .` in a virtual environment.
 This needs Python 3.11+, tmux 3.4+, and the OpenSSH client on PATH. No changes to
 `~/.tmux.conf` are necessary. Workspace servers use dedicated socket names and
 ignore the user's tmux configuration.
+
+Nix uses the native `nested-tmux-key` helper to avoid starting Python for each
+navigation shortcut. Source/pip installations use the Python fallback unless
+that helper is on PATH; build it separately with `nix build .#key-helper`.
+See [performance measurements](docs/performance.md).
 
 Attach from a plain terminal for the intended keyboard behavior: an enclosing
 tmux may intercept the same shortcuts. Starting a workspace inside another tmux
@@ -331,6 +336,10 @@ runtime edits, named workspace isolation, shell exit and empty-branch cleanup,
 export and reinitialization, controller restart without duplicate
 launches, SSH reconnection, hostile terminal output, forwarding restrictions,
 bounded RPC/control messages, and the installed Nix executable and helpers.
+Native helper tests cover partial replies, malformed/oversized replies, missing
+controllers, sanitized diagnostics, and timeouts without retrying actions. The
+source test runner compiles the helper with `cc` if it is not already on PATH;
+the Nix development shell supplies it and the compiler.
 
 ## Build the demo
 

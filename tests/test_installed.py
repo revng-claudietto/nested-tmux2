@@ -46,6 +46,9 @@ class InstalledTests(ServiceCase):
             return result.stdout
 
         self.status = json.loads(cli("up"))
+        binding = self.tmux("work", "list-keys", "-T", "root", "M-Right")
+        self.assertIn("/bin/nested-tmux-key", binding)
+        self.assertNotIn("launcher.py", binding)
         terminal = self.attach_pty()
         os.write(terminal, b"\x14")
         eventually(

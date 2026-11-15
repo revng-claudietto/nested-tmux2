@@ -17,6 +17,22 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          keyHelper = pkgs.stdenv.mkDerivation {
+            pname = "nested-tmux-key";
+            version = "0.1.0";
+            src = ./native;
+            strictDeps = true;
+            buildPhase = ''
+              runHook preBuild
+              $CC -std=c11 -O2 -Wall -Wextra -Werror key.c -o nested-tmux-key
+              runHook postBuild
+            '';
+            installPhase = ''
+              runHook preInstall
+              install -Dm755 nested-tmux-key "$out/bin/nested-tmux-key"
+              runHook postInstall
+            '';
+          };
           package = pkgs.python3Packages.buildPythonApplication {
             pname = "nested-tmux";
             version = "0.1.0";
@@ -44,6 +60,7 @@
             build-system = [ pkgs.python3Packages.setuptools ];
             dependencies = [ pkgs.python3Packages.pyyaml ];
             nativeCheckInputs = [
+              keyHelper
               pkgs.tmux
               pkgs.openssh
             ];
@@ -60,6 +77,7 @@
               "PATH"
               ":"
               (pkgs.lib.makeBinPath [
+                keyHelper
                 pkgs.tmux
                 pkgs.openssh
               ])
@@ -75,6 +93,7 @@
         {
           default = package;
           nested-tmux = package;
+          key-helper = keyHelper;
           demo = import ./demo { inherit pkgs package; };
         }
       );
@@ -98,6 +117,7 @@
         {
           default = pkgs.mkShell {
             packages = [
+              self.packages.${system}.key-helper
               (pkgs.python3.withPackages (ps: [
                 ps.pyyaml
                 ps.setuptools

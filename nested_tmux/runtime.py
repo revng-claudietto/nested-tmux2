@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -268,6 +269,16 @@ class Tree:
 
     def _bindings(self):
         ctl = self.root.control
+        helper = shutil.which("nested-tmux-key")
+
+        def key_script(action):
+            args = (
+                [str(Path(helper).resolve()), str(self.state / "rpc.sock"), action]
+                if helper
+                else launcher("_rpc", self.state, action)
+            )
+            return shlex.join(args).replace("#", "##")
+
         ctl.call("set-option", "-g", "prefix", "C-a")
         for key, action in {
             "M-Up": "up",
@@ -276,11 +287,9 @@ class Tree:
             "M-Right": "right",
             "C-t": "new",
         }.items():
-            script = shlex.join(launcher("_rpc", self.state, action)).replace("#", "##")
-            ctl.call("bind-key", "-T", "root", key, "run-shell", script)
+            ctl.call("bind-key", "-T", "root", key, "run-shell", key_script(action))
         for key, action in {"C-c": "new", "c": "new", "C-a": "last", "[": "copy"}.items():
-            script = shlex.join(launcher("_rpc", self.state, action)).replace("#", "##")
-            ctl.call("bind-key", "-T", "prefix", key, "run-shell", script)
+            ctl.call("bind-key", "-T", "prefix", key, "run-shell", key_script(action))
         ctl.call("bind-key", "-T", "prefix", "d", "detach-client")
         ctl.call("bind-key", "-T", "prefix", "a", "send-prefix")
         for key, operation in {"C-s": "row", "C-r": "ssh-row", "A": "rename"}.items():
@@ -298,7 +307,7 @@ class Tree:
                 "8",
                 script,
             )
-        remove = shlex.join(launcher("_rpc", self.state, "remove")).replace("#", "##")
+        remove = key_script("remove")
         from .control import command
 
         ctl.call(

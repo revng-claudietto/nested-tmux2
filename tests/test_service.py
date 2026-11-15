@@ -547,3 +547,15 @@ class ServiceTests(ServiceCase):
                 response = json.loads(sock.makefile("rb").readline())
                 self.assertIn("error", response)
         self.assertEqual(request(self.state, "status")["active"], "work")
+
+    def test_keyboard_acknowledgement_and_errors(self):
+        self.launch()
+        for action, expected in [("right", b"OK\n"), ("unknown\u001b[31m", b"ERR ")]:
+            with socket.socket(socket.AF_UNIX) as sock:
+                sock.connect(str(self.state / "rpc.sock"))
+                sock.sendall(json.dumps({"op": "key", "action": action}).encode() + b"\n")
+                with sock.makefile("rb") as stream:
+                    response = stream.readline(4096)
+                self.assertTrue(response.startswith(expected), response)
+                self.assertNotIn(b"\x1b", response)
+        self.assertEqual(self.tmux("work", "display-message", "-p", "#{window_name}"), "project")

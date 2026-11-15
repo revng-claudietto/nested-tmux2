@@ -34,6 +34,7 @@ alias does not create isolation from the same account.
 | Command or format injection | Distinct tmux-token and shell-argument encoding; stable locally generated socket names; no shell evaluation of remote replies. Reject tmux format introducers in cwd. |
 | Terminal clipboard, passthrough, or rename sequences | Local root `set-clipboard=off`, `get-clipboard=off` where supported, `allow-passthrough=off`, `allow-rename=off`, and `set-titles=off`. Child settings also default to these values. Native process-based naming is enabled only for leaves without an explicit title; branch labels remain fixed. |
 | Malformed/flooded control data | Response framing, bounded lines, bounded reply size and queue, command deadlines, sanitized CLI diagnostics; overflow/disconnect closes the stream. |
+| Native keyboard helper | Fixed action vocabulary, bounded buffers, partial I/O handling, one monotonic deadline, sanitized diagnostics, and no retry after a missing acknowledgement. It connects only to the local Unix socket; it has no tmux parser, shell execution, or SSH code. |
 | Replaying a command after a lost acknowledgement | Mark startup before launch; retain the uncertain state and refuse automatic replay. |
 
 These SSH controls use documented [OpenSSH options](https://man.openbsd.org/ssh_config.5);
