@@ -7,7 +7,7 @@ name = "nested-tmux"
 version = "0.1.0"
 description = "Declarative terminal trees with nested tmux rows and SSH transport"
 requires-python = ">=3.11"
-dependencies = ["PyYAML>=6.0"]
+dependencies = ["ruamel.yaml>=0.19.1,<0.20"]
 readme = "README.md"
 license = { file = "LICENSE" }
 

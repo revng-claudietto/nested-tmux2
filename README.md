@@ -52,7 +52,7 @@ through a private Unix socket and tmux control mode.
 
 ## Run
 
-The flake pins **nixos-unstable** in `flake.lock` and includes Python, PyYAML, tmux,
+The flake pins **nixos-unstable** in `flake.lock` and includes Python, ruamel.yaml, tmux,
 OpenSSH, and a small native keyboard helper. Linux on x86_64 and aarch64 is
 supported by the flake; the test run used x86_64. From this directory:
 
@@ -180,6 +180,10 @@ An array launches an executable with literal arguments. A string runs through
 `/bin/sh -c`; use `exec bash -l` at its end if you want an interactive shell
 afterward. A terminal closes when its command finishes.
 
+Recipes use YAML 1.2 by default: unquoted `yes`, `no`, `on`, and `off` are strings;
+`true` and `false` are booleans. Environment values and command arguments must be
+strings. Duplicate keys, non-string mapping keys, and custom tags are rejected.
+
 `cwd` and `env` inherit from the parent. Paths must be absolute or start with
 `~/`; `~` is resolved on the machine that runs the terminal. Crossing to another
 host resets the default cwd to that host's home. `env` is a mapping of strings.
@@ -229,7 +233,12 @@ its target is untouched. It always writes the user `.yaml` file, even if the
 workspace was initialized from `.yml`, a system recipe, or an explicit path.
 If the destination does not exist, additive saving merges with the discovered
 recipe, or the explicit recipe passed as `save recipe.yaml`. Source files at
-other paths are untouched. YAML comments and formatting are not retained.
+other paths are untouched. Additive saving uses
+[ruamel.yaml](https://yaml.dev/doc/ruamel.yaml/detail/) to retain comments,
+quotes, literal/folded command styles, and existing key order. Indentation and
+some whitespace may be normalized. Anchors and aliases are retained; a merge
+that would modify another row through a shared alias reports an error instead.
+`save --replace` and `dump` generate fresh YAML without the original comments.
 
 After reboot, launch with the same `--name` to recreate the saved tree. Runtime
 edits are saved only when you run `save` or `dump`; there is no automatic save.

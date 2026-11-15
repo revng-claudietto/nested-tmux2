@@ -3,6 +3,7 @@ import copy
 import io
 import os
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -10,7 +11,7 @@ from unittest.mock import patch
 import yaml
 
 from nested_tmux.cli import main
-from nested_tmux.config import Error, discover, load, save
+from nested_tmux.config import Error, as_data, discover, load, save
 
 
 class SaveTests(unittest.TestCase):
@@ -162,3 +163,92 @@ class SaveTests(unittest.TestCase):
             with self.subTest(root=root), self.assertRaisesRegex(Error, "save --replace"):
                 save({**self.data, "root": root}, name="work")
             self.assertEqual(self.destination.read_bytes(), original)
+
+    def test_comments_quotes_scalar_styles_and_anchors_survive_additive_save(self):
+        source = self.directory / "annotated.yml"
+        original = textwrap.dedent("""\
+            # Workspace notes
+            name: "work" # Keep this name comment
+            root:
+              id: desk
+              env: &build_env
+                MODE: 'debug' # Keep the shared environment
+              children:
+                # Editor setup
+                - id: shell # Keep this terminal
+                  command: |- # Startup script
+                    printf 'hello\\n'
+                    exec bash
+                - id: closed
+                  command: >- # Folded startup script
+                    exec
+                    bash
+                - id: branch
+                  children:
+                    - id: old
+                      env: *build_env # Alias comment
+                      command: ["cat", '-u'] # Flow command
+            # End of recipe
+            """)
+        source.write_text(original)
+        live = as_data(load(source))
+        live["root"]["children"].pop(1)  # Closed nodes and their comments survive.
+        live["root"]["children"][1]["children"].append({"id": "new"})
+        live["root"]["children"].append({"id": "extra"})
+        with patch("nested_tmux.cli.request", return_value=live):
+            self.assertEqual(self.cli("save", str(source))[0], 0)
+            first = self.destination.read_text()
+            for comment in (
+                "Workspace notes",
+                "Keep this name comment",
+                "Keep the shared environment",
+                "Editor setup",
+                "Keep this terminal",
+                "Startup script",
+                "Folded startup script",
+                "Alias comment",
+                "Flow command",
+                "End of recipe",
+            ):
+                self.assertEqual(first.count(f"# {comment}"), 1, first)
+            for style in (
+                'name: "work"',
+                "MODE: 'debug'",
+                "command: |-",
+                "command: >-",
+                "&build_env",
+                "*build_env",
+                """command: ["cat", '-u']""",
+            ):
+                self.assertIn(style, first)
+            config = load(self.destination)
+            self.assertEqual(config.root.children[0].shell, "printf 'hello\\n'\nexec bash")
+            self.assertEqual(config.root.children[1].shell, "exec bash")
+            self.assertEqual(len(config.root.children[2].children), 2)
+            self.assertEqual(self.cli("save", "--name", "work")[0], 0)
+            self.assertEqual(self.destination.read_text(), first)
+            self.assertEqual(self.cli("save", "--name", "work", "--replace")[0], 0)
+            self.assertNotIn("# Workspace notes", self.destination.read_text())
+        self.assertEqual(source.read_text(), original)
+
+    def test_aliased_rows_cannot_change_unrelated_rows_during_merge(self):
+        self.destination.parent.mkdir(parents=True)
+        self.destination.write_text(
+            textwrap.dedent("""\
+            name: work
+            root:
+              id: desk
+              children:
+                - id: first
+                  children: &shared
+                    - id: shell
+                - id: second
+                  children: *shared
+            """)
+        )
+        before = self.destination.read_bytes()
+        live = as_data(load(self.destination))
+        live["root"]["children"][0]["children"].append({"id": "new"})
+        with self.assertRaisesRegex(Error, "YAML alias"):
+            save(live, name="work")
+        self.assertEqual(self.destination.read_bytes(), before)

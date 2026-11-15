@@ -78,3 +78,26 @@ class ConfigTests(unittest.TestCase):
         for path in (Path(__file__).resolve().parent.parent / "examples").glob("*.yaml"):
             with self.subTest(path=path):
                 load(path)
+
+    def test_yaml_12_strings_and_rejected_tags_keys_and_documents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "work.yaml"
+            path.write_text(
+                "name: work\nroot:\n  id: desk\n  env: {ON: yes, OFF: no}\n"
+                "  children: [{id: shell, command: [echo, on, off]}]\n"
+            )
+            config = load(path)
+            self.assertEqual(config.root.env, {"ON": "yes", "OFF": "no"})
+            self.assertEqual(config.root.children[0].argv, ("echo", "on", "off"))
+            cases = (
+                "name: work\nroot: !custom {id: desk, children: [{id: shell}]}\n",
+                "name: work\nroot: {id: desk, children: [{id: shell, command: !custom cat}]}\n",
+                "name: work\nroot: {id: desk, children: [{id: shell, env: {1: x}}]}\n",
+                "name: work\nroot: {id: desk, children: [{id: shell, id: repeated}]}\n",
+                "name: work\n---\nname: second\n",
+                "!!python/object/apply:os.system ['false']\n",
+            )
+            for text in cases:
+                with self.subTest(text=text), self.assertRaises(Error):
+                    path.write_text(text)
+                    load(path)

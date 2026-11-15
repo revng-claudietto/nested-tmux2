@@ -7,9 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-import yaml
-
-from .config import Error, discover, load, parse, save
+from .config import Error, discover, dump_yaml, load, parse, save
 from .control import clean_env
 from .runtime import Tree, launcher
 from .service import private_directory, request, serve, state_path
@@ -211,7 +209,7 @@ def main(argv=None):
             print(f"Saved {path}")
             return 0
         elif args.op == "dump":
-            result = yaml.safe_dump(request(state, "dump"), sort_keys=False, allow_unicode=True)
+            result = dump_yaml(request(state, "dump"))
             if args.output:
                 args.output.write_text(result)
             else:

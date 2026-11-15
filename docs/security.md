@@ -11,8 +11,13 @@ emulator.
 The local user, local configuration, SSH configuration, application files, and
 local tmux server are trusted. YAML commands intentionally execute with the
 user's privileges on the specified host. Only load configurations you trust.
-YAML parsing uses a restricted SafeLoader with duplicate-key rejection; this
-prevents object constructors, not the intentional execution of `command`.
+YAML parsing uses ruamel.yaml's round-trip loader with duplicate-key and
+non-string-key rejection. A restricted constructor rejects unknown tags,
+including Python object tags; no unsafe constructors are enabled. This prevents
+object construction, not the intentional execution of `command`. The runtime
+model contains plain strings, so YAML comments and styles stay in the recipe
+editor. Additive saving checks that aliases cannot make edits to one row change
+an unrelated row.
 Automatic recipes are read only from local XDG configuration directories, never
 from the current working directory or a remote host. Workspace names are
 validated before constructing paths. User recipes take precedence over system

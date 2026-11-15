@@ -1,6 +1,7 @@
 """Strict configuration parsing; no environment expansion on the wrong host."""
 
 import hashlib
+import io
 import json
 import os
 import re
@@ -8,17 +9,45 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
+from ruamel.yaml import YAML, YAMLError
+from ruamel.yaml.constructor import DuplicateKeyError, RoundTripConstructor, SafeConstructor
 
 
 class Error(Exception):
     """A user-facing configuration, transport, or operation error."""
 
 
+class StrictConstructor(RoundTripConstructor):
+    def construct_mapping(self, node, maptyp, deep=False):
+        super().construct_mapping(node, maptyp, deep=deep)
+        if any(not isinstance(key, str) for key in maptyp):
+            raise Error("YAML mapping keys must be strings")
+
+
+# Round-trip mode normally retains unknown tags. Recipes reject them just as
+# the safe loader did, including tags that would construct Python objects.
+StrictConstructor.add_constructor(None, SafeConstructor.construct_undefined)
+
+
+def yaml_codec():
+    codec = YAML(typ="rt")
+    codec.Constructor = StrictConstructor
+    codec.preserve_quotes = True
+    codec.allow_duplicate_keys = False
+    codec.indent(mapping=2, sequence=4, offset=2)
+    return codec
+
+
+def dump_yaml(data):
+    output = io.StringIO()
+    yaml_codec().dump(data, output)
+    return output.getvalue()
+
+
 def string(value, where):
     if not isinstance(value, str) or not value or any(ord(c) < 32 for c in value):
         raise Error(f"{where}: expected a nonempty string without control characters")
-    return value
+    return str(value)
 
 
 @dataclass(frozen=True)
@@ -104,13 +133,14 @@ def add_nodes(saved, live):
     if "children" not in saved:
         return saved
     current = {node["id"]: node for node in live["children"]}
-    children = [
-        add_nodes(node, current[node["id"]]) if node["id"] in current else node
-        for node in saved["children"]
-    ]
+    # Keep the original CommentedMap/CommentedSeq objects: rebuilding plain
+    # dictionaries/lists discards comments, scalar styles and anchor metadata.
+    for node in saved["children"]:
+        if node["id"] in current:
+            add_nodes(node, current[node["id"]])
     known = {node["id"] for node in saved["children"]}
-    children.extend(node for node in live["children"] if node["id"] not in known)
-    return {**saved, "children": children}
+    saved["children"].extend(node for node in live["children"] if node["id"] not in known)
+    return saved
 
 
 def save(data, *, name, replace=False, source=None):
@@ -129,7 +159,7 @@ def save(data, *, name, replace=False, source=None):
         if source is not None:
             saved = read_data(source)
             if isinstance(saved, dict):
-                saved = {**saved, "name": name}
+                saved["name"] = name
             saved_config = parse(saved)
             saved_hosts = {node.path: node.host for node in saved_config.root.walk()}
             for node in parse(data).root.walk():
@@ -138,9 +168,19 @@ def save(data, *, name, replace=False, source=None):
                         f"{node.path}: saved and live hosts differ; "
                         "use save --replace to replace the recipe"
                     )
-            data = {**saved, "root": add_nodes(saved["root"], data["root"])}
+            # Aliased row/children objects can share mutable storage. Compare
+            # with an unaliased merge so one row cannot silently edit another.
+            expected = json.loads(json.dumps(saved))
+            add_nodes(expected["root"], data["root"])
+            add_nodes(saved["root"], data["root"])
+            if saved != expected:
+                raise Error(
+                    "saving would change other rows through a YAML alias; "
+                    "expand the alias or use save --replace"
+                )
+            data = saved
     parse(data)  # Check the merged tree before touching the destination.
-    contents = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+    contents = dump_yaml(data)
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = None
     try:
@@ -240,7 +280,7 @@ def parse(data):
                 raise Error(f"{path}: invalid or reserved environment name: {key}")
             if not isinstance(value, str) or "\0" in value or "\n" in value or "\r" in value:
                 raise Error(f"{path}.env.{key} must be a string without NUL or newlines")
-            env[key] = value
+            env[str(key)] = str(value)
         launch = raw.get("command")
         argv = launch if isinstance(launch, list) else []
         shell = launch if isinstance(launch, str) else None
@@ -253,7 +293,15 @@ def parse(data):
             raise Error(f"{path}.command executable must not be empty")
         if shell is not None and "\0" in shell:
             raise Error(f"{path}.command cannot contain NUL")
-        base = Node(path, title, host, cwd, env, argv=tuple(argv), shell=shell)
+        base = Node(
+            path,
+            title,
+            host,
+            cwd,
+            env,
+            argv=tuple(str(arg) for arg in argv),
+            shell=str(shell) if shell is not None else None,
+        )
         if "children" not in raw:
             if parent and host != parent.host:
                 raise Error(f"{path}: put host on a branch, so remote terminals persist in tmux")
@@ -276,27 +324,12 @@ def parse(data):
 def read_data(path):
     path = Path(path)
     try:
-
-        class Loader(yaml.SafeLoader):
-            pass
-
-        def mapping(loader, node):
-            loader.flatten_mapping(node)
-            result = {}
-            for key_node, value_node in node.value:
-                key = loader.construct_object(key_node)
-                if not isinstance(key, str):
-                    raise Error("YAML mapping keys must be strings")
-                if key in result:
-                    raise Error(f"duplicate YAML key: {key}")
-                result[key] = loader.construct_object(value_node)
-            return result
-
-        Loader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
         if path.stat().st_size > 1024 * 1024:
             raise Error("configuration is larger than 1 MiB")
-        return yaml.load(path.read_text(), Loader=Loader)
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+        return yaml_codec().load(path.read_text())
+    except DuplicateKeyError as exc:
+        raise Error(f"{path}: duplicate YAML key: {exc}") from exc
+    except (OSError, ValueError, YAMLError) as exc:
         raise Error(f"{path}: {exc}") from exc
 
 

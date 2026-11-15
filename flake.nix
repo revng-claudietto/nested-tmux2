@@ -58,11 +58,12 @@
                 && pkgs.lib.cleanSourceFilter path type;
             };
             build-system = [ pkgs.python3Packages.setuptools ];
-            dependencies = [ pkgs.python3Packages.pyyaml ];
+            dependencies = [ pkgs.python3Packages.ruamel-yaml ];
             nativeCheckInputs = [
               keyHelper
               pkgs.tmux
               pkgs.openssh
+              pkgs.python3Packages.pyyaml
             ];
             checkPhase = ''
               runHook preCheck
@@ -120,6 +121,7 @@
               self.packages.${system}.key-helper
               (pkgs.python3.withPackages (ps: [
                 ps.pyyaml
+                ps.ruamel-yaml
                 ps.setuptools
               ]))
               pkgs.tmux
