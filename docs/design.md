@@ -141,6 +141,47 @@ controller, and tmux socket namespace, including separate servers on remote
 hosts. Dumps include the selected name. Reusing a name reconnects to that live
 tree; distinct names do not share terminal state.
 
+Row identity is the workspace name plus the complete node-ID path. New socket
+names begin with `nested-tmux2-`, followed by a bounded workspace label and
+hashes of the workspace and path. Neither the originating machine nor the
+runtime directory participates. A workspace-scoped file lock in the local
+tmux socket directory prevents two local controller owners; the root records
+the owner's runtime directory for subsequent CLI calls. Across computers,
+matching identities on a remote account deliberately share the same server.
+Concurrent remote tree edits from different controllers are not serialized.
+
+Each server stores versioned workspace, row-path, and root-role metadata.
+`ls` enumerates candidate sockets without creating servers, validates this
+metadata against socket names, and reports the readable paths. The selected
+initialization configuration chooses remote hosts; discovered metadata never
+adds routes. Hosts used only by unsaved live edits are excluded. Remote scanning
+uses a fixed POSIX-shell command over the existing private SSH master, with
+printable field separators and bounded output/deadlines; it needs no remote
+Python. Socket locations follow each host's `TMUX_TMPDIR` or `/tmp`.
+
+`kill` uses the same inventory, recursively selecting path components by
+default. `--no-recursive` leaves descendant servers running. A remote anchor
+can select descendants only on its own host. The controller removes killed
+branches from live intent and closes their parent attachments, pruning empty
+ancestors without terminating orphan descendants. `--all --local` also stops
+the controller and its local SSH masters, without sending remote kill commands.
+`down` aliases `kill --all`. Partial discovery or termination failure is reported
+with a nonzero status; other reachable rows are still processed.
+
+There is no persistent recovery journal. Once the local root disappears,
+initialization uses YAML or the default tree; surviving remote servers are
+reattached by deterministic identity. Omitted remote rows are neither imported
+nor destroyed. Unsaved local topology is lost. A missing configured server may
+be initialized during explicit startup, while background reconnection remains
+attach-only.
+
+For upgrades, a live root using the previous machine/runtime-derived socket
+scheme can be adopted from its locally trusted metadata at the original runtime
+directory. Its existing servers are tagged for discovery without restarting
+applications or renaming sockets. Tagged legacy servers remain discoverable
+after local shutdown. An untagged legacy remote server whose local root has
+already disappeared cannot be reliably associated with a workspace.
+
 Adding/removing nodes changes live metadata. Dumping exports that tree with
 best-effort cwd observations. It preserves the configured command, rather than
 guessing how to reconstruct an arbitrary running process. No restore plugin or

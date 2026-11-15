@@ -43,6 +43,9 @@ if __name__ == "__main__":
         # Automatic recipe discovery must never read the invoking user's recipes.
         os.environ["XDG_CONFIG_HOME"] = str(Path(directory) / "config")
         os.environ["XDG_CONFIG_DIRS"] = str(Path(directory) / "system-config")
+        sockets = Path(directory) / "t"
+        sockets.mkdir(mode=0o700)
+        os.environ["TMUX_TMPDIR"] = str(sockets)
         if not shutil.which("nested-tmux-key"):
             from native_helper import build_helper
 

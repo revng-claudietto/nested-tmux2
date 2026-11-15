@@ -47,6 +47,15 @@ alias does not create isolation from the same account.
 | Malformed/flooded control data | Response framing, bounded lines, bounded reply size and queue, bounded SSH master diagnostics, command deadlines, sanitized CLI diagnostics; overflow/disconnect closes the stream. |
 | Native keyboard helper | Fixed action vocabulary, bounded buffers, partial I/O handling, one monotonic deadline, sanitized diagnostics, and no retry after a missing acknowledgement. It connects only to the local Unix socket; it has no tmux parser, shell execution, or SSH code. |
 | Replaying a command after a lost acknowledgement | Mark startup before launch; retain the uncertain state and refuse automatic replay. Background reconnect uses attach-only control clients and never recreates a missing server. |
+| Discovery redirecting a kill to another host | Only local configuration chooses queried hosts. Socket basenames and workspace/path metadata are validated; returned paths are never executed or used as local socket paths. A remote row cannot claim a local root or expand recursive termination onto another host. |
+
+The `nested-tmux2-` prefix and deterministic identities identify managed servers;
+they are not authentication. The same remote account and workspace/path identify
+the same server from different computers, so an authorized full shutdown can
+terminate another client's attached row. Other workspaces remain outside the
+selection. Remote metadata remains untrusted and never becomes local tree
+authority. Discovery output and stderr are bounded, operations have deadlines,
+and failed hosts are reported without treating them as empty inventories.
 
 These SSH controls use documented [OpenSSH options](https://man.openbsd.org/ssh_config.5);
 clipboard and passthrough settings follow the [tmux manual](https://man.openbsd.org/tmux.1).

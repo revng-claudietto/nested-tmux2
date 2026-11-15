@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .config import Config, Error, Node, as_data, parse
 from .control import Control, Transport, TransportError, clean_env
+from .inventory import LEGACY_RE, Inventory, digest, run, socket_name
 from .ssh import SSHMaster
 
 
@@ -47,7 +48,8 @@ class Tree:
             machine = Path("/etc/machine-id").read_text().strip()
         except OSError:
             machine = socket.gethostname()
-        self.namespace = hashlib.sha256(f"{machine}:{state}".encode()).hexdigest()[:16]
+        self.legacy_namespace = hashlib.sha256(f"{machine}:{state}".encode()).hexdigest()[:16]
+        self.legacy_rows = {}
         self.rows = {}
         self.masters = {}
         self._recoveries = {}
@@ -68,18 +70,14 @@ class Tree:
             for child in node.children:
                 self.parents[child.path] = node.path
             if node.branch:
-                ident = (
-                    "root"
-                    if node is config.root
-                    else hashlib.sha256(node.path.encode()).hexdigest()[:16]
-                )
                 master = None
                 if node.host != "local":
                     if node.host not in self.masters:
                         self.masters[node.host] = SSHMaster(self.state, node.host, self.ssh_config)
                     master = self.masters[node.host]
                 control = Control(
-                    Transport(node.host, self.ssh_config, master), f"nt-{self.namespace}-{ident}"
+                    Transport(node.host, self.ssh_config, master),
+                    socket_name(config.name, node.path),
                 )
                 old = previous.get(node.path)
                 if old:
@@ -94,6 +92,36 @@ class Tree:
 
     def recover(self, create=True):
         # The root server owns the live tree. YAML is used only for a fresh root.
+        inventory = Inventory(self.config.name, self.state, self.ssh_config, self.masters)
+        rows, errors = inventory.scan({"local"})
+        if errors:
+            raise Error("; ".join(errors))
+        roots = [row for row in rows if row.root]
+        if len(roots) > 1:
+            raise Error("multiple local roots for this workspace; inspect them with ls")
+        if roots:
+            self.root.control.socket_name = roots[0].socket
+        else:
+            # Read-only adoption of the immediately preceding socket scheme.
+            legacy = f"nt-{self.legacy_namespace}-root"
+            code, saved, _ = run(
+                [
+                    "tmux",
+                    "-N",
+                    "-L",
+                    legacy,
+                    "-f",
+                    "/dev/null",
+                    "show-options",
+                    "-gqv",
+                    "@nt-tree",
+                ]
+            )
+            if code == 0 and saved.strip():
+                config = parse(json.loads(base64.b64decode(saved.strip(), validate=True)))
+                if config.name != self.config.name:
+                    raise Error("legacy root belongs to another workspace")
+                self.root.control.socket_name = legacy
         self.root.control.connect(create=create)
         saved = self.root.control.call("show-options", "-gqv", "@nt-tree")
         if saved:
@@ -106,6 +134,18 @@ class Tree:
             if self.root is not old_root:
                 self.root.control.close()
                 self.root.control = old_root.control
+        root_socket = self.root.control.socket_name
+        if LEGACY_RE.fullmatch(root_socket) and root_socket.endswith("-root"):
+            # Also covers a partially completed upgrade: the local root may
+            # already be tagged while its child servers still lack tags.
+            self.legacy_rows = {
+                node.path: root_socket.removesuffix("root") + digest(node.path)
+                for node in self.config.root.walk()
+                if node.branch and node is not self.config.root
+            }
+        # Resolve remote rows only from hosts selected by the trusted local tree.
+        # No remote metadata is ever installed as the local tree.
+        self._known_rows = rows
 
     def prepare(self, size=None):
         if size is not None and (
@@ -116,6 +156,42 @@ class Tree:
             raise Error("size must contain two integers between 1 and 10000")
         self.recover()
         self._save_metadata()
+        inventory = Inventory(self.config.name, self.state, self.ssh_config, self.masters)
+        discovered, errors = inventory.scan({r.node.host for r in self.rows.values()} - {"local"})
+        if errors:
+            raise Error("; ".join(errors))
+        discovered += self._known_rows
+        for row in self.rows.values():
+            if row is self.root:
+                continue
+            candidates = [
+                r for r in discovered if r.host == row.node.host and r.path == row.node.path
+            ]
+            if len(candidates) > 1:
+                raise Error(f"multiple servers for {row.node.host}:{row.node.path}")
+            name = candidates[0].socket if candidates else None
+            if name is None and row.node.path in self.legacy_rows:
+                legacy = self.legacy_rows[row.node.path]
+                code, _, _ = run(
+                    inventory.transport(row.node.host).wrap(
+                        [
+                            "tmux",
+                            "-N",
+                            "-L",
+                            legacy,
+                            "-f",
+                            "/dev/null",
+                            "has-session",
+                            "-t",
+                            "tree",
+                        ]
+                    )
+                )
+                if code == 0:
+                    name = legacy
+            if name and name != row.control.socket_name:
+                row.control.close()
+                row.control.socket_name = name
         if size is not None:
             clients = self.root.control.call("list-clients", "-F", "#{client_control_mode}")
             # An attached terminal remains authoritative. Before first attach,
@@ -164,9 +240,20 @@ class Tree:
 
     def _save_metadata(self):
         self.root.control.call("set-option", "-g", "@nt-tree", self._metadata(self.config))
+        self._tag(self.root)
+
+    def _tag(self, row):
+        for key, value in {
+            "@nt2-version": "1",
+            "@nt2-workspace": self.config.name,
+            "@nt2-row": row.node.path,
+            "@nt2-root": "1" if row is self.root else "0",
+        }.items():
+            row.control.call("set-option", "-g", key, value)
 
     def _prepare_row(self, row):
         ctl = row.control
+        self._tag(row)
         for name, value in {
             # Keep an exited pane only until the controller removes it from the
             # live tree. This also makes very short startup commands observable.
@@ -686,6 +773,7 @@ class Tree:
     def status(self):
         return {
             "name": self.config.name,
+            "ssh_config": str(self.ssh_config) if self.ssh_config else None,
             "digest": self.config.digest,
             "active": self.active,
             "errors": self.errors,
@@ -712,6 +800,54 @@ class Tree:
         if failures:
             raise Error("could not stop all rows: " + "; ".join(failures))
         self.closed = True
+
+    def forget(self, killed, local=False):
+        """Drop killed branches from live intent without killing their survivors."""
+        paths = {
+            r.path for r in killed if r.path in self.rows and self.rows[r.path].node.host == r.host
+        }
+        if not paths:
+            return
+        if self.root.node.path in paths:
+            self.closed = True
+            return
+        data = as_data(self.config)
+
+        def prune(node, path):
+            if path in paths:
+                return False
+            if "children" not in node:
+                return True
+            node["children"] = [
+                child for child in node["children"] if prune(child, path + "/" + child["id"])
+            ]
+            if node["children"]:
+                return True
+            # Match normal terminal-exit behavior: prune empty ancestors only.
+            self._kill_row(self.rows[path], graceful=path == self.root.node.path)
+            paths.add(path)
+            return False
+
+        if not prune(data["root"], self.root.node.path):
+            self.closed = True
+            return
+        # Remove attachment windows from parents that are still alive. Child
+        # servers left by --no-recursive become discoverable orphan rows.
+        for path in paths:
+            parent = self.parents.get(path)
+            if parent and not any(parent == p or parent.startswith(p + "/") for p in paths):
+                row = self.rows[parent]
+                if path in row.windows:
+                    row.control.call("kill-window", "-t", row.windows.pop(path))
+        for path, row in self.rows.items():
+            if any(path == p or path.startswith(p + "/") for p in paths):
+                row.control.close()
+        self._install_config(parse(data))
+        self.active = self.root.node.path
+        self._save_metadata()
+        self._styles(
+            {path for path, row in self.rows.items() if row.node.host == "local"} if local else None
+        )
 
     def close(self):
         self._workers.shutdown(wait=True, cancel_futures=True)

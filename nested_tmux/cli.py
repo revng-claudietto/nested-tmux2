@@ -9,8 +9,9 @@ from pathlib import Path
 
 from .config import Error, discover, dump_yaml, load, parse, save
 from .control import clean_env
-from .runtime import Tree, launcher
-from .service import private_directory, request, serve, state_path
+from .inventory import Inventory, hosts_for, terminate
+from .runtime import launcher
+from .service import owner_state, private_directory, request, serve, state_path
 
 
 def terminal_size():
@@ -34,6 +35,7 @@ def size_argument(value):
 
 
 def start(config, config_path, state, ssh_config, size=None):
+    state = owner_state(config.name, state)
     private_directory(state.parent)
     private_directory(state)
     try:
@@ -88,7 +90,7 @@ def main(argv=None):
         parents=[selector],
     )
     sub = parser.add_subparsers(dest="op", required=True)
-    for op in ("up", "attach", "status", "down", "stop", "check", "dump", "save", "_serve"):
+    for op in ("up", "attach", "status", "down", "stop", "check", "dump", "save", "ls", "_serve"):
         p = sub.add_parser(op, parents=[selector])
         p.add_argument(
             "config",
@@ -98,6 +100,8 @@ def main(argv=None):
         )
         p.add_argument("--runtime-dir", type=Path)
         p.add_argument("--ssh-config", type=Path)
+        if op in {"ls", "down"}:
+            p.add_argument("--local", action="store_true", help="consider only local rows")
         if op == "up":
             p.add_argument("--attach", action="store_true")
         if op in {"up", "attach", "_serve"}:
@@ -114,6 +118,18 @@ def main(argv=None):
                 action="store_true",
                 help="replace the saved recipe with the live tree instead of only adding new nodes",
             )
+    kill = sub.add_parser(
+        "kill", parents=[selector], help="terminate a row subtree or all workspace rows"
+    )
+    kill.add_argument("targets", nargs="*", metavar="[CONFIG] ROW")
+    kill.add_argument("--runtime-dir", type=Path)
+    kill.add_argument("--ssh-config", type=Path)
+    kill.add_argument(
+        "--all", action="store_true", help="kill every discovered row in this workspace"
+    )
+    kill.add_argument("--local", action="store_true", help="consider only local rows")
+    kill.add_argument("--host", help="host of the named row, to resolve ambiguous paths")
+    kill.add_argument("--no-recursive", action="store_true", help="preserve child row servers")
     for op in ("add-terminal", "add-row", "remove", "rename"):
         p = sub.add_parser(op, parents=[selector])
         p.add_argument(
@@ -153,6 +169,20 @@ def main(argv=None):
     else:
         args = parser.parse_args(argv)
     try:
+        if args.op == "kill":
+            targets = args.targets
+            if args.all:
+                if len(targets) > 1 or args.host or args.no_recursive:
+                    raise Error("use kill [CONFIG] --all [--local]")
+                args.config = Path(targets[0]) if targets else None
+                args.path = None
+            else:
+                if not 1 <= len(targets) <= 2:
+                    raise Error("use kill [CONFIG] ROW [--host HOST] [--no-recursive]")
+                args.config = Path(targets[0]) if len(targets) == 2 else None
+                args.path = targets[-1]
+            if args.local and args.host not in {None, "local"}:
+                raise Error("--local cannot select a remote --host")
         if args.op == "_rpc":
             request(args.state, "nav", action=args.action)
             return 0
@@ -192,12 +222,25 @@ def main(argv=None):
             )
         )
         state = state_path(config.name, args.runtime_dir)
+        if args.op not in {"check", "_serve"}:
+            state = owner_state(config.name, state)
         if args.op == "check":
             print(f"{config.name}: valid ({sum(n.branch for n in config.root.walk())} rows)")
             return 0
         ssh_config = getattr(args, "ssh_config", None)
         if ssh_config:
             ssh_config = ssh_config.resolve()
+        if args.op in {"ls", "kill", "down"}:
+            try:
+                active = request(state, "status")
+            except (FileNotFoundError, ConnectionRefusedError):
+                active = None
+            if active:
+                previous = active.get("ssh_config")
+                if ssh_config is None and previous:
+                    ssh_config = Path(previous)
+                elif args.op != "ls" and ssh_config and str(ssh_config) != previous:
+                    raise Error("stop the controller before changing its SSH configuration")
         if args.op == "_serve":
             serve(config, state, ssh_config, size=args.size)
             return 0
@@ -244,17 +287,45 @@ def main(argv=None):
             else:
                 print(result, end="")
             return 0
-        elif args.op == "down":
+        elif args.op == "ls":
+            rows, errors = Inventory(config.name, state, ssh_config).scan(
+                hosts_for(config, args.local)
+            )
+            print("WORKSPACE\tHOST\tROW")
+            for row in rows:
+                print(f"{config.name}\t{row.host}\t{row.path}")
+            for error in errors:
+                print(
+                    "nested-tmux: " + re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", error), file=sys.stderr
+                )
+            return int(bool(errors))
+        elif args.op in {"down", "kill"}:
+            options = {
+                "hosts": sorted(hosts_for(config, args.local)),
+                "path": getattr(args, "path", None),
+                "host": getattr(args, "host", None),
+                "all": args.op == "down" or args.all,
+                "recursive": not getattr(args, "no_recursive", False),
+                "local": args.local,
+            }
             try:
-                result = request(state, "down")
+                result = request(state, "kill", **options)
             except (FileNotFoundError, ConnectionRefusedError):
-                tree = Tree(config, state, ssh_config)
-                try:
-                    tree.recover(create=False)
-                    tree.down()
-                    result = {"stopped": True}
-                finally:
-                    tree.close()
+                result = terminate(
+                    Inventory(config.name, state, ssh_config),
+                    options["hosts"],
+                    path=options["path"],
+                    host=options["host"],
+                    all_rows=options["all"],
+                    recursive=options["recursive"],
+                    local=options["local"],
+                )
+            print(json.dumps(result, indent=2))
+            for error in result["errors"]:
+                print(
+                    "nested-tmux: " + re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", error), file=sys.stderr
+                )
+            return int(bool(result["errors"]))
         else:
             result = request(state, args.op)
         print(json.dumps(result, indent=2))

@@ -33,11 +33,16 @@ Run the same command to reconnect to that named workspace. Omit `--name` to use
 `default`. The outer row displays explicit workspace names such as `[work]`;
 the default workspace has no name label.
 From a local checkout, use `nix run . -- --name work`.
-To terminate a whole workspace from another terminal:
+To terminate the workspace's rows on this machine and its configured SSH hosts:
 
 ```sh
 nix run github:revng-claudietto/nested-tmux2 -- down --name work
 ```
+
+To close everything locally while keeping remote terminals running, use
+`kill --all --local --name work`. Run the workspace again to recreate local
+terminals and reconnect to configured remote rows. See [lifecycle and limits](#lifecycle-and-limits)
+for discovery and shutdown commands.
 
 Each branch has a tmux server and each child is a tab. A branch tab displays its
 child server, so the rows stay visible. A local controller handles navigation
@@ -210,7 +215,7 @@ the foreground program changes.
 IDs and workspace names use letters, digits, underscores, and hyphens. Initial rows must
 have at least one child; empty rows are removed automatically at runtime.
 
-`name` identifies the workspace within the runtime directory. When its root tmux
+`name` identifies the workspace independently of its runtime directory. When its root tmux
 server already exists, **the live tree wins**: editing YAML and running `up`
 again does not undo runtime changes or rerun surviving commands. When the
 controller restarts it reads the tree from the local root server. After a reboot
@@ -372,8 +377,8 @@ recovery reattaches to surviving servers and never replays interrupted commands.
 Local rows remain available during background connection attempts. If the
 remote tmux server itself has disappeared (for example after a remote reboot),
 run `nested-tmux up` to explicitly recreate it. For a YAML workspace, pass its
-file to `up`. Keep the workspace name and local runtime directory stable to
-reconnect to the same remote servers.
+file to `up`. Keep the workspace name and row ID paths stable to reconnect to
+the same remote servers; the local runtime directory may change.
 
 OpenSSH's server-side `MaxSessions` setting limits simultaneous channels on one
 connection; its default is 10. Count one channel per remote row, plus one per
@@ -392,12 +397,51 @@ separate SSH configuration; stop and restart the controller to change it.
 nested-tmux status
 nested-tmux stop       # Stop only the controller; keep all terminals.
 nested-tmux up         # Reconnect; recreate missing servers if needed.
-nested-tmux down       # Terminate this workspace, including remote rows.
+nested-tmux ls         # Discover rows locally and on configured SSH hosts.
+nested-tmux ls --local
+nested-tmux kill work/project                 # Kill this row and its descendants.
+nested-tmux kill work/project --no-recursive  # Leave child row servers running.
+nested-tmux kill --all                        # All discovered rows in this workspace.
+nested-tmux kill --all --local                # Shut down locally; preserve remote servers.
+nested-tmux down                              # Alias for kill --all.
+nested-tmux down --local                      # Alias for kill --all --local.
 ```
 
 These commands use the workspace named `default`. Pass `--name work` to select
 another workspace, or supply a YAML file to use the name in that file. Names
 select independent controllers, local and remote tmux servers, and live trees.
+
+`ls` and `kill` work even when the controller and local root are gone. They use
+the selected YAML (explicit, or found by workspace name) to choose SSH hosts,
+then inspect **all** this workspace's running rows on those hosts, including
+rows no longer in the recipe. Without a configuration containing SSH hosts,
+only local rows are considered. Hosts known only through unsaved runtime edits
+are not queried. `--local` makes no remote queries.
+
+Listing prints `WORKSPACE`, `HOST`, and the full `ROW` ID path. Use that path
+with `kill`; if it exists on multiple hosts, add `--host HOST`. The host selects
+the named row; recursive killing includes its descendants on eligible hosts.
+A remote subtree stays on its host. Empty ancestors in the live tree are pruned,
+as when closing the last terminal in a branch. `--no-recursive` leaves descendant
+servers as discoverable orphan rows. Neither command edits the recipe.
+An unreachable host produces an error and nonzero exit status; listing and
+termination still report successful results from other hosts.
+
+Every new server socket has a `nested-tmux2-` prefix and a deterministic suffix
+derived from the workspace name and row ID path. Titles can change without
+changing identity. Matching workspace/path identities on the same remote
+account refer to the **same running row**, even from different local computers.
+Use different workspace names for independent trees. Terminating a shared row
+affects everyone attached to it; simultaneous tree edits from separate local
+controllers are not coordinated.
+
+`kill --all --local` closes local rows, the controller, and its SSH connections.
+Remote tmux servers keep running. On the next startup, the initialization
+configuration recreates local terminals and reuses matching remote servers
+without replaying their running commands. No durable recovery file is written:
+unsaved edits to the local tree are lost when its root server is gone. Remote
+rows omitted from the recipe remain running and can be found and killed with
+`ls` and `kill`, provided their host still appears in the selected configuration.
 
 The running controller removes exited terminals and empty branches, including
 over SSH. If you deliberately stop the controller, exited panes are kept until
@@ -406,8 +450,9 @@ To pick up a new application version for an existing workspace, run `stop`, then
 `up` or `attach`, with the same `--name`; surviving terminals keep running.
 
 The runtime socket/log directory lives under `$XDG_RUNTIME_DIR` or a private
-`/tmp/nested-tmux-UID` directory. `--runtime-dir /private/path` overrides the base;
-use the same base for subsequent operations. SSH master socket paths must fit
+`/tmp/nested-tmux-UID` directory. `--runtime-dir /private/path` overrides the base.
+Changing it does not change row identity or create an independent workspace;
+a running controller is found through the local root. SSH master socket paths must fit
 88 bytes and must not contain `%`, `$`, or `~`; use a short runtime directory if
 necessary. Navigation focus is shared by
 clients attached to the same workspace.
@@ -429,7 +474,8 @@ nix flake check path:.
 nix develop path:. --command python3 tests/run-local.py
 ```
 
-Tests use unique socket names, temporary private directories, and a loopback
+Tests use private tmux socket directories on both sides of SSH, temporary runtime
+directories, and a loopback
 OpenSSH server with temporary keys and strict host-key checks. No system sshd or
 tmux configuration is changed. The runner checks that the invoking tmux server's
 pane/process inventory remains unchanged. In a Nix build, a test-only NSS

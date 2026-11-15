@@ -1,8 +1,10 @@
+import os
 import subprocess
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from nested_tmux.config import parse
 from nested_tmux.control import clean_env
@@ -51,6 +53,11 @@ class TreeCase(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="nt-test-", dir="/tmp")
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
+        sockets = self.directory / "t"
+        sockets.mkdir(mode=0o700)
+        environment = patch.dict(os.environ, TMUX_TMPDIR=str(sockets))
+        environment.start()
+        self.addCleanup(environment.stop)
         self.tree = None
 
     def build(self, data=None, ssh_config=None):

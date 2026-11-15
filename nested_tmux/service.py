@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import signal
 import socket
 import stat
@@ -12,6 +13,7 @@ import time
 from pathlib import Path
 
 from .config import Error
+from .inventory import Inventory, prefix, run, socket_directory, terminate
 from .runtime import Tree
 
 MAX_REQUEST = 4096
@@ -47,7 +49,7 @@ def request(state, op, **fields):
     if len(payload) > MAX_REQUEST:
         raise Error("RPC request too large")
     with socket.socket(socket.AF_UNIX) as client:
-        client.settimeout(120 if op == "reconcile" else 30)
+        client.settimeout(120 if op in {"reconcile", "kill"} else 30)
         client.connect(str(Path(state) / "rpc.sock"))
         client.sendall(payload)
         with client.makefile("rb") as stream:
@@ -61,10 +63,45 @@ def request(state, op, **fields):
         return result["result"]
 
 
+def owner_state(name, fallback):
+    """A live local root may be owned through a different runtime directory."""
+    rows, _ = Inventory(name, fallback).scan({"local"})
+    for row in rows:
+        if not row.root:
+            continue
+        code, value, _ = run(
+            [
+                "tmux",
+                "-N",
+                "-L",
+                row.socket,
+                "-f",
+                "/dev/null",
+                "show-options",
+                "-gqv",
+                "@nt2-state",
+            ]
+        )
+        if code == 0 and value.strip():
+            candidate = Path(value.strip())
+            if not candidate.is_absolute():
+                continue
+            try:
+                result = request(candidate, "status")
+                if result.get("name") == name:
+                    return candidate
+            except (OSError, Error):
+                pass
+    return fallback
+
+
 def serve(config, state, ssh_config=None, size=None):
     private_directory(state.parent)
     private_directory(state)
-    lock = (state / "controller.lock").open("a+")
+    directory = socket_directory()
+    private_directory(directory)
+    lock_path = directory / (prefix(config.name) + "controller.lock")
+    lock = os.fdopen(os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600), "a+")
     # stop removes its RPC listener before finishing control-channel cleanup.
     # An immediate up must wait for that owner to release the lock.
     lock_deadline = time.monotonic() + 15
@@ -91,6 +128,7 @@ def serve(config, state, ssh_config=None, size=None):
     previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
         tree.prepare(size=size)
+        tree.root.control.call("set-option", "-g", "@nt2-state", str(state))
         path.unlink(missing_ok=True)  # Exclusive lock proves no live controller owns it.
         server.bind(str(path))
         path.chmod(0o600)
@@ -141,6 +179,24 @@ def serve(config, state, ssh_config=None, size=None):
                     elif op == "down":
                         tree.down()
                         running, result = False, {"stopped": True}
+                    elif op == "kill":
+                        hosts = message.get("hosts", ["local"])
+                        if not isinstance(hosts, list) or any(
+                            not isinstance(h, str)
+                            or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.@:-]*", h)
+                            for h in hosts
+                        ):
+                            raise Error("invalid discovery hosts")
+                        result = terminate(
+                            Inventory(config.name, state, ssh_config, tree.masters),
+                            hosts,
+                            path=message.get("path"),
+                            host=message.get("host"),
+                            all_rows=message.get("all", False),
+                            recursive=message.get("recursive", True),
+                            local=message.get("local", False),
+                            tree=tree,
+                        )
                     else:
                         raise Error("unknown RPC operation")
                     response = (

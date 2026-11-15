@@ -1,6 +1,6 @@
 """Drive the installed application through a real PTY for asciinema.
 
-The recording uses its own HOME, runtime directory, and generated tmux sockets.
+The recording uses its own HOME, runtime directory, and tmux socket directory.
 Every transition waits for application state; timing pauses are for the viewer.
 """
 
@@ -28,12 +28,14 @@ class Demo:
         self.work = directory / "work"
         self.work.mkdir()
         (directory / "run").mkdir(mode=0o700)
+        (directory / "t").mkdir(mode=0o700)
         self.env = {
             **{
                 k: v for k, v in os.environ.items() if k not in {"TMUX", "TMUX_PANE", "TMUX_PARENT"}
             },
             "HOME": str(directory),
             "XDG_RUNTIME_DIR": str(directory / "run"),
+            "TMUX_TMPDIR": str(directory / "t"),
             "TERM": "xterm-256color",
             "PS1": "demo:~/work $ ",
             "PROMPT_COMMAND": "",

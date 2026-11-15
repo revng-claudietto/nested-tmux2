@@ -13,6 +13,8 @@ from helpers import eventually
 class SSHServer:
     def __init__(self, directory, allow_agent_forwarding=False, max_sessions=10):
         self.directory = directory
+        sockets = directory / "t"
+        sockets.mkdir(mode=0o700)
         self.sshd = shutil.which("sshd")
         if not self.sshd:
             raise RuntimeError("OpenSSH sshd is required for the SSH integration tests")
@@ -48,7 +50,7 @@ AllowTcpForwarding no
 AllowAgentForwarding {"yes" if allow_agent_forwarding else "no"}
 X11Forwarding no
 PrintMotd no
-SetEnv PATH={os.environ["PATH"]}
+SetEnv PATH={os.environ["PATH"]} TMUX_TMPDIR={sockets}
 """)
         self.client_config = directory / "ssh_config"
         self.client_config.write_text(f"""Host nt-test-host
@@ -95,13 +97,13 @@ SetEnv PATH={os.environ["PATH"]}
                     "-o",
                     "BatchMode=yes",
                     "nt-test-host",
-                    "true",
+                    "printenv TMUX_TMPDIR",
                 ],
                 capture_output=True,
                 text=True,
                 timeout=10,
             )
-            if probe.returncode:
+            if probe.returncode or probe.stdout.strip() != str(sockets):
                 raise RuntimeError(probe.stderr + (directory / "sshd.log").read_text())
         except Exception:
             self.close()

@@ -513,7 +513,9 @@ class ServiceTests(ServiceCase):
         self.assertEqual(
             before, self.tmux("work/scratch", "list-panes", "-a", "-F", "#{pane_id}:#{pane_pid}")
         )
-        restored = Tree(export, self.directory / "copy")
+        from nested_tmux.config import as_data, parse
+
+        restored = Tree(parse({**as_data(export), "name": "copy"}), self.directory / "copy")
         try:
             restored.prepare()
             self.assertIn("work/scratch", restored.rows)

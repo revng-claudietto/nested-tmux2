@@ -196,7 +196,9 @@ class SSHMaster:
             os.close(lock)
 
     def stop(self):
-        """Explicit cleanup for isolated tests; normal clients leave ControlPersist running."""
+        """Close a workspace-owned local master without making an SSH connection."""
         self._private()
         if self.path.exists():
-            self._run(self.command("exit"), timeout=2)
+            code, detail = self._run(self.command("exit"), timeout=2)
+            if code and not any(text in detail for text in ("No such file", "Connection refused")):
+                raise Error(f"could not close SSH master: {detail}")
