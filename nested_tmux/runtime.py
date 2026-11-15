@@ -107,17 +107,51 @@ class Tree:
                 self.root.control.close()
                 self.root.control = old_root.control
 
-    def prepare(self):
+    def prepare(self, size=None):
+        if size is not None and (
+            not isinstance(size, (tuple, list))
+            or len(size) != 2
+            or any(type(d) is not int or not 1 <= d <= 10000 for d in size)
+        ):
+            raise Error("size must contain two integers between 1 and 10000")
         self.recover()
         self._save_metadata()
+        if size is not None:
+            clients = self.root.control.call("list-clients", "-F", "#{client_control_mode}")
+            # An attached terminal remains authoritative. Before first attach,
+            # seed all root windows from the launching tty, less its status row.
+            if "0" not in clients:
+                self._seed_size(self.root, (size[0], max(1, size[1] - 1)), all_windows=True)
+        root_size = self._root_size()
         for row in self.rows.values():
             if row is not self.root:
                 row.control.connect()
+            self._seed_size(row, root_size)
         for row in reversed(list(self.rows.values())):
             self._prepare_row(row)
         self._bindings()
         self.active = self.config.root.path
         self._styles()
+
+    def _root_size(self):
+        value = self.root.control.call(
+            "display-message", "-p", "-t", "tree:", "#{window_width} #{window_height}"
+        )[0]
+        return tuple(map(int, value.split()))
+
+    def _seed_size(self, row, root_size, all_windows=False):
+        width, height = root_size
+        height = max(1, height - row.node.path.count("/"))
+        ctl = row.control
+        ctl.call("set-option", "-t", "tree", "default-size", f"{width}x{height}")
+        for line in ctl.call("list-windows", "-F", "#{window_id} #{@nt-ready}"):
+            wid, _, ready = line.partition(" ")
+            if ready == "1" and not all_windows:
+                continue
+            # Only placeholder panes are normally resized here. Restore tmux's
+            # automatic sizing so real tty changes still propagate after attach.
+            ctl.call("resize-window", "-t", wid, "-x", str(width), "-y", str(height))
+            ctl.call("set-option", "-w", "-t", wid, "window-size", "latest")
 
     @staticmethod
     def _metadata(config):
@@ -425,13 +459,37 @@ class Tree:
         data = as_data(self.config)
         self._find(data, parent)["children"].append(node)
         config = parse(data)  # Validate before tmux changes or shell execution.
+        # This operation will reveal the destination. Do so before launching
+        # anything: tmux defers resizing hidden windows until they are selected.
+        self._focus(parent)
+        root_size = self._root_size()
+        expected = (root_size[0], max(1, root_size[1] - parent.count("/")))
+        deadline = time.monotonic() + 5
+        while True:
+            value = self.rows[parent].control.call(
+                "display-message",
+                "-p",
+                "-t",
+                "tree:",
+                "#{window_width} #{window_height}",
+                timeout=2,
+            )[0]
+            if tuple(map(int, value.split())) == expected:
+                break
+            if time.monotonic() >= deadline:
+                raise Error(
+                    f"terminal size has not reached {parent}; retry once its display connects"
+                )
+            time.sleep(0.02)
         self._install_config(config)
         self._save_metadata()
         path = parent + "/" + node["id"]
         for candidate, row in reversed(list(self.rows.items())):
             if candidate == path or candidate.startswith(path + "/"):
                 row.control.connect()
+                self._seed_size(row, root_size)
                 self._prepare_row(row)
+        self._seed_size(self.rows[parent], root_size)
         self._prepare_row(self.rows[parent])
         self._bindings()
         self.rows[parent].control.call("select-window", "-t", self.rows[parent].windows[path])

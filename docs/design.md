@@ -151,6 +151,17 @@ titles even when they equal the node ID, and leaves default titles omitted.
 Reconciliation applies these names to surviving windows without restarting
 their processes.
 
+Startup carries the invoking tty's width and height to the local controller
+(or accepts `--size COLSxROWS` for headless launches). Before launching user
+commands, it sizes placeholder windows and sets each row's `default-size`,
+subtracting one status line per level. A real root client remains authoritative;
+control clients use `ignore-size` and never advertise an artificial tty size.
+Explicit placeholder resizing is followed by `window-size latest`, preserving
+normal resize propagation after attach. Runtime additions first reveal their
+parent and wait for its display size to settle, because tmux defers resizing
+hidden windows. All sizing uses the existing control channels, including SSH;
+remote geometry is never used to resize the local root.
+
 This is not a transactional distributed system: an SSH failure midway through
 an edit can leave part of the requested tree created. The recorded intent lets
 `up` reconnect/reconcile; an uncertain launch requires explicit inspection.

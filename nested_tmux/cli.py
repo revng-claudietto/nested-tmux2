@@ -13,7 +13,27 @@ from .runtime import Tree, launcher
 from .service import private_directory, request, serve, state_path
 
 
-def start(config, config_path, state, ssh_config):
+def terminal_size():
+    for fd in (0, 1, 2):
+        try:
+            size = os.get_terminal_size(fd)
+        except OSError:
+            continue
+        if size.columns > 0 and size.lines > 0:
+            return (size.columns, size.lines)
+    return None
+
+
+def size_argument(value):
+    if not re.fullmatch(r"[0-9]{1,5}x[0-9]{1,5}", value):
+        raise argparse.ArgumentTypeError("size must be COLSxROWS, for example 140x40")
+    size = tuple(map(int, value.split("x")))
+    if not all(1 <= dimension <= 10000 for dimension in size):
+        raise argparse.ArgumentTypeError("size dimensions must be between 1 and 10000")
+    return size
+
+
+def start(config, config_path, state, ssh_config, size=None):
     private_directory(state.parent)
     private_directory(state)
     try:
@@ -21,13 +41,15 @@ def start(config, config_path, state, ssh_config):
     except (FileNotFoundError, ConnectionRefusedError):
         pass
     else:
-        return request(state, "reconcile")
+        return request(state, "reconcile", size=size)
     args = launcher("_serve")
     if config_path is not None:
         args.append(str(config_path))
     args += ["--runtime-dir", str(state.parent), "--name", config.name]
     if ssh_config:
         args += ["--ssh-config", str(ssh_config)]
+    if size is not None:
+        args += ["--size", f"{size[0]}x{size[1]}"]
     with (state / "controller.log").open("w") as log:
         process = subprocess.Popen(
             args,
@@ -78,6 +100,12 @@ def main(argv=None):
         p.add_argument("--ssh-config", type=Path)
         if op == "up":
             p.add_argument("--attach", action="store_true")
+        if op in {"up", "attach", "_serve"}:
+            p.add_argument(
+                "--size",
+                type=size_argument,
+                help="initial outer terminal size in COLSxROWS (default: invoking terminal)",
+            )
         if op == "dump":
             p.add_argument("-o", "--output", type=Path)
         if op == "save":
@@ -171,7 +199,7 @@ def main(argv=None):
         if ssh_config:
             ssh_config = ssh_config.resolve()
         if args.op == "_serve":
-            serve(config, state, ssh_config)
+            serve(config, state, ssh_config, size=args.size)
             return 0
         if args.op in {"up", "attach"}:
             result = start(
@@ -179,6 +207,7 @@ def main(argv=None):
                 config_path.resolve() if config_path is not None else None,
                 state,
                 ssh_config,
+                size=args.size or terminal_size(),
             )
             if args.op == "attach" or args.attach:
                 # A dedicated root server, never the invoking user's current server.

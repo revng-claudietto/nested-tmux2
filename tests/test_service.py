@@ -82,9 +82,9 @@ class ServiceCase(TreeCase):
         )
         return result.stdout.strip()
 
-    def attach_pty(self, command=None, environment=None, cwd=None):
+    def attach_pty(self, command=None, environment=None, cwd=None, size=(140, 40)):
         master, slave = pty.openpty()
-        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 140, 0, 0))
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", size[1], size[0], 0, 0))
         env = {**clean_env(), "TERM": "xterm-256color", **(environment or {})}
         proc = subprocess.Popen(
             command

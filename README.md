@@ -74,6 +74,23 @@ Attach from a plain terminal for the intended keyboard behavior: an enclosing
 tmux may intercept the same shortcuts. Starting a workspace inside another tmux
 does not modify that outer server.
 
+On startup, the invoking terminal's dimensions are used to size each row before
+launching its commands, accounting for one status line per nesting level. This
+avoids a full-screen application first drawing at tmux's fallback size and then
+resizing when its branch is shown. The same sizing applies to SSH branches.
+Actual terminal resizes still propagate normally; tmux may defer updates to
+hidden windows until they are selected.
+
+For startup without a terminal, supply the expected outer size explicitly:
+
+```sh
+nix run github:revng-claudietto/nested-tmux2 -- up --name work --size 140x40
+```
+
+Without a terminal or `--size`, tmux's existing/fallback size is used. Attaching
+later from a differently sized terminal necessarily resizes applications. An
+already attached terminal takes precedence over a startup size hint.
+
 ## Keys
 
 | Key | Action in the active row |

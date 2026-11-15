@@ -61,7 +61,7 @@ def request(state, op, **fields):
         return result["result"]
 
 
-def serve(config, state, ssh_config=None):
+def serve(config, state, ssh_config=None, size=None):
     private_directory(state.parent)
     private_directory(state)
     lock = (state / "controller.lock").open("a+")
@@ -90,7 +90,7 @@ def serve(config, state, ssh_config=None):
 
     previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
-        tree.prepare()
+        tree.prepare(size=size)
         path.unlink(missing_ok=True)  # Exclusive lock proves no live controller owns it.
         server.bind(str(path))
         path.chmod(0o600)
@@ -126,7 +126,7 @@ def serve(config, state, ssh_config=None):
                     elif op in {"nav", "key"}:
                         result = tree.navigate(message.get("action"))
                     elif op == "reconcile":
-                        tree.prepare()
+                        tree.prepare(size=message.get("size"))
                         result = tree.status()
                     elif op == "add":
                         result = tree.add(message.get("parent"), message.get("node"))

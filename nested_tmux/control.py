@@ -146,7 +146,7 @@ class Control:
             thread.start()
         try:
             self._response()
-            self.call("refresh-client", "-f", "no-output")
+            self.call("refresh-client", "-f", "no-output,ignore-size")
         except Exception:
             self.close()
             raise
