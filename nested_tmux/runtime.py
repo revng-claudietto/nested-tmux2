@@ -9,11 +9,14 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Config, Error, Node, as_data, parse
 from .control import Control, Transport, TransportError, clean_env
+from .ssh import SSHMaster
 
 
 def launcher(*args):
@@ -46,6 +49,10 @@ class Tree:
             machine = socket.gethostname()
         self.namespace = hashlib.sha256(f"{machine}:{state}".encode()).hexdigest()[:16]
         self.rows = {}
+        self.masters = {}
+        self._recoveries = {}
+        self._retry = {}
+        self._workers = ThreadPoolExecutor(max_workers=4, thread_name_prefix="nt-reconnect")
         self._install_config(config)
         self.active = config.root.path
         self.errors = {}
@@ -66,8 +73,13 @@ class Tree:
                     if node is config.root
                     else hashlib.sha256(node.path.encode()).hexdigest()[:16]
                 )
+                master = None
+                if node.host != "local":
+                    if node.host not in self.masters:
+                        self.masters[node.host] = SSHMaster(self.state, node.host, self.ssh_config)
+                    master = self.masters[node.host]
                 control = Control(
-                    Transport(node.host, self.ssh_config), f"nt-{self.namespace}-{ident}"
+                    Transport(node.host, self.ssh_config, master), f"nt-{self.namespace}-{ident}"
                 )
                 old = previous.get(node.path)
                 if old:
@@ -192,7 +204,13 @@ class Tree:
                 ctl.call("set-option", "-w", "-t", wid, "@nt-node", child.path)
             row.windows[child.path] = wid
             ready = ctl.call("show-options", "-wqv", "-t", wid, "@nt-ready")
-            if ready == ["1"]:
+            bridge = self._bridge(row, self.rows[child.path]) if child.branch else None
+            bridge_hash = hashlib.sha256(bridge.encode()).hexdigest() if bridge else None
+            previous_bridge = (
+                ctl.call("show-options", "-wqv", "-t", wid, "@nt-bridge") if bridge else []
+            )
+            # Updating an attachment never reruns a terminal's launch command.
+            if ready == ["1"] and (not bridge or previous_bridge == [bridge_hash]):
                 self._window_name(row, child, wid)
                 continue
             if ready == ["starting"]:
@@ -210,7 +228,7 @@ class Tree:
             for key, value in child.env.items():
                 args += ["-e", f"{key}={value}"]
             if child.branch:
-                args += [self._bridge(row, self.rows[child.path])]
+                args += [bridge]
             elif child.argv:
                 args += ["exec " + shlex.join(child.argv)]
             elif child.shell is not None:
@@ -227,6 +245,8 @@ class Tree:
             except Error:
                 ctl.call("set-option", "-wu", "-t", wid, "@nt-ready")
                 raise
+            if bridge:
+                ctl.call("set-option", "-w", "-t", wid, "@nt-bridge", bridge_hash)
             ctl.call("set-option", "-w", "-t", wid, "@nt-ready", "1")
             self._window_name(row, child, wid)
         if bootstrap:
@@ -425,6 +445,8 @@ class Tree:
         return self.status()
 
     def _kill_row(self, row, graceful=False):
+        if row.control.transport.master:
+            row.control.transport.master.ensure()
         result = subprocess.run(
             row.control.transport.wrap(
                 [
@@ -479,6 +501,59 @@ class Tree:
         self._styles()
         return self.status()
 
+    def reconnect(self):
+        """Attach to surviving remote servers, never recreate or replay launches.
+
+        Workers own only their candidate Control. Tree edits and installation
+        of successful connections stay on the controller's main thread.
+        """
+        for path, (row, original, future) in list(self._recoveries.items()):
+            if not future.done():
+                continue
+            del self._recoveries[path]
+            try:
+                candidate = future.result()
+            except (Error, OSError, subprocess.TimeoutExpired) as exc:
+                if self.rows.get(path) is row and row.control is original:
+                    self.errors[path] = str(exc)
+                    delay = min(self._retry.get(path, (0, 0.5))[1] * 2, 30)
+                    self._retry[path] = (time.monotonic() + delay, delay)
+            else:
+                if (
+                    self.rows.get(path) is row
+                    and row.control is original
+                    and not original.connected
+                ):
+                    original.close()
+                    row.control = candidate
+                    self._retry.pop(path, None)
+                    self.errors.pop(path, None)
+                    self._styles({path})
+                else:
+                    candidate.close()
+        now = time.monotonic()
+        for path, row in self.rows.items():
+            if (
+                row.node.host == "local"
+                or row.control.connected
+                or path in self._recoveries
+                or now < self._retry.get(path, (0, 0))[0]
+            ):
+                continue
+
+            def attach(original):
+                candidate = Control(original.transport, original.socket_name, timeout=3)
+                try:
+                    candidate.connect(create=False)
+                except Exception:
+                    candidate.close()
+                    raise
+                # Only the attach handshake has a short recovery deadline.
+                candidate.timeout = original.timeout
+                return candidate
+
+            self._recoveries[path] = (row, row.control, self._workers.submit(attach, row.control))
+
     def reap_exited(self):
         """Observe leaf exits through control replies, including over SSH.
 
@@ -502,6 +577,7 @@ class Tree:
                     "#{window_id}\t#{pane_dead}\t#{@nt-ready}",
                     timeout=2,
                 )
+                self.errors.pop(path, None)
                 dead = {
                     fields[0]
                     for line in panes
@@ -590,5 +666,13 @@ class Tree:
         self.closed = True
 
     def close(self):
+        self._workers.shutdown(wait=True, cancel_futures=True)
+        for _, _, future in self._recoveries.values():
+            if not future.cancelled():
+                try:
+                    future.result().close()
+                except (Error, OSError, subprocess.TimeoutExpired):
+                    pass
+        self._recoveries.clear()
         for row in self.rows.values():
             row.control.close()

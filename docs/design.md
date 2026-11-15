@@ -25,7 +25,7 @@ user's existing tmux sessions and configuration.
 
 There is one long-running Python daemon per named workspace. It owns the live
 tree and keeps one `tmux -C` process connected to each row, using persistent SSH
-connections for remote rows. A navigation binding starts `nested-tmux-key`, a
+channels within one shared SSH connection per host alias. A navigation binding starts `nested-tmux-key`, a
 small C executable that sends an action such as `right` to the daemon's Unix
 socket, waits for acknowledgement, and exits. The daemon translates it into tmux
 commands such as `next-window -t tree` and writes them to the existing control
@@ -70,6 +70,52 @@ quoted. Launches use `respawn-pane` with a launch command and cwd, never text
 typed into a running shell. No synthetic Alt+F12 or parent-socket environment
 variable is used. A timeout closes that control stream and does not retry a
 mutation whose outcome is unknown.
+
+## SSH connection ownership and recovery
+
+The controller owns one private OpenSSH master per workspace, host alias, and
+SSH configuration path. Every remote control client, terminal attachment, and
+cleanup command connects to that master's Unix socket. The master uses
+`ControlMaster=yes` and `ControlPersist=300`; channel clients use
+`ControlMaster=no`. The socket is mode 0600 inside the workspace's mode-0700
+directory, independent of any `ControlPath` in the user's SSH configuration.
+Only local configuration chooses its path and host.
+
+Only the controller starts masters. A file lock serializes startup, and a dead
+socket is removed only after a failed liveness check and a refused Unix socket
+connection. Channel clients specify `ProxyCommand=false` so failure to use the
+master cannot fall back to an independent TCP connection. The master itself
+honors trusted `ProxyJump`/`ProxyCommand` settings. Agent/X11/port forwarding and
+local command hooks are disabled when creating the master, as well as on clients.
+OpenSSH's documented [ControlMaster](https://man.openbsd.org/ssh_config#ControlMaster)
+and [ControlPersist](https://man.openbsd.org/ssh_config#ControlPersist) implement
+sharing and five-minute idle expiry; the controller need not remain alive for
+the master to survive.
+
+The half-second maintenance loop schedules disconnected remote control streams
+for background recovery, with up to four workers and exponential backoff from
+one to 30 seconds. A worker connects a new candidate control client using
+`attach-session`, never `new-session`. The main thread installs a successful
+candidate only if its row and original control object are still current.
+Concurrent removal, explicit reconciliation, or replacement cannot install a
+stale candidate. Failed commands are never retried. Automatic recovery cannot
+recreate missing servers or replay startup commands; explicit `up` can reconcile
+a remote host after reboot.
+
+The terminal bridge retries its attachment every second through the same master.
+A dead master drops all its channels; once a controller worker creates its
+replacement, control and display channels reattach independently. Keepalives
+and bounded command deadlines detect broken connections, so recovery is not
+instantaneous. Pipe readers can stop even if a multiplexed channel retains a
+file descriptor after its local SSH client exits. Closing a control client first
+requests detachment and then terminates it if it does not exit promptly.
+
+When a bridge command changes on an application upgrade, its stored hash causes
+only that attachment pane to respawn. Child servers and leaf processes survive.
+OpenSSH's [MaxSessions](https://man.openbsd.org/sshd_config#MaxSessions) defaults
+to 10: each remote row and each local-to-remote display consumes a channel, and
+cleanup/recovery needs spare channels. Larger trees require raising that server
+limit; the application will not evade it with additional connections.
 
 ## Live tree versus initialization
 
@@ -127,5 +173,5 @@ host. They should not be interpreted as successful remote cleanup on failure.
 These are design judgments for this UI, not claims that the alternatives cannot
 be extended. The chosen approach retains tmux's terminal rendering and process
 lifetime management, at the cost of one server per row, nested terminal
-attachments, and one SSH control connection per remote row. Initial limits are
+attachments, and one SSH control channel per remote row. Initial limits are
 32 levels, 1024 nodes, 60 KB of encoded live metadata, and 4 KB per RPC request.

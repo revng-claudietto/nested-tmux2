@@ -66,3 +66,50 @@ class ControlTests(TreeCase):
         with patch("time.monotonic", side_effect=[0, 0.005, 0.02]):
             with self.assertRaisesRegex(Error, "outcome is unknown"):
                 control._response()
+
+    def test_close_does_not_wait_for_inherited_pipe_descriptors(self):
+        import os
+        import signal
+        import sys
+        import threading
+        from unittest.mock import patch
+
+        from helpers import eventually
+
+        pidfile = self.directory / "pipe-holder.pid"
+        script = r"""
+import os, sys, time
+pid = os.fork()
+if pid == 0:
+    time.sleep(30)
+    os._exit(0)
+with open(sys.argv[1], 'w') as stream:
+    stream.write(str(pid))
+print('%begin 1 1 1\n%end 1 1 1', flush=True)
+for line in sys.stdin:
+    if 'detach-client' in line:
+        break
+    print('%begin 2 2 1\n%end 2 2 1', flush=True)
+"""
+        transport = Transport()
+        control = Control(transport, "unused", timeout=2)
+        thread = None
+        try:
+            with patch.object(
+                transport, "wrap", return_value=[sys.executable, "-c", script, str(pidfile)]
+            ):
+                control.connect()
+            eventually(pidfile.exists)
+            thread = threading.Thread(target=control.close, daemon=True)
+            thread.start()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive(), "close waited for the pipe holder")
+        finally:
+            if pidfile.exists():
+                try:
+                    os.kill(int(pidfile.read_text()), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            if thread:
+                thread.join(timeout=3)
+            control.close()

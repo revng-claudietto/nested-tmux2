@@ -70,6 +70,8 @@ class TreeCase(unittest.TestCase):
                 timeout=15,
             )
         self.tree.close()
+        for master in self.tree.masters.values():
+            master.stop()
 
     def query(self, path, *args):
         return self.tree.rows[path].control.call(*args)

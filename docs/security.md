@@ -29,13 +29,13 @@ alias does not create isolation from the same account.
 | Forging tree structure/host routes | Only the local root's metadata supplies the live tree. Remote replies never become local RPC requests. A remote subtree cannot change host or return to `local`. |
 | Forging terminal exit reports | Reported window IDs are matched only against the reporting row's locally held children. Only exited leaves are removed; unrelated local terminals and other named workspaces are outside that map. Disconnects never trigger removal. |
 | SSH agent/X11/port access | Explicitly disable agent and X11 forwarding, clear configured forwards, and disable SSH escape commands on both control and interactive connections. |
-| Reusing a permissive SSH master | `ControlPath=none`, `ControlMaster=no`, and `ControlPersist=no` prevent inheriting an existing multiplexed connection's forwarding settings. |
+| Reusing a permissive SSH master | A private, locally derived master socket overrides the configured `ControlPath`. The application creates its own master with forwarding disabled; it never joins an unrelated master. Channel clients cannot fall back to an independent connection. |
 | Local SSH hooks | `PermitLocalCommand=no`; host arguments are validated aliases, not arbitrary SSH options. User-authored ProxyCommand/ProxyJump configuration remains trusted. |
 | Command or format injection | Distinct tmux-token and shell-argument encoding; stable locally generated socket names; no shell evaluation of remote replies. Reject tmux format introducers in cwd. |
 | Terminal clipboard, passthrough, or rename sequences | Local root `set-clipboard=off`, `get-clipboard=off` where supported, `allow-passthrough=off`, `allow-rename=off`, and `set-titles=off`. Child settings also default to these values. Native process-based naming is enabled only for leaves without an explicit title; branch labels remain fixed. |
-| Malformed/flooded control data | Response framing, bounded lines, bounded reply size and queue, command deadlines, sanitized CLI diagnostics; overflow/disconnect closes the stream. |
+| Malformed/flooded control data | Response framing, bounded lines, bounded reply size and queue, bounded SSH master diagnostics, command deadlines, sanitized CLI diagnostics; overflow/disconnect closes the stream. |
 | Native keyboard helper | Fixed action vocabulary, bounded buffers, partial I/O handling, one monotonic deadline, sanitized diagnostics, and no retry after a missing acknowledgement. It connects only to the local Unix socket; it has no tmux parser, shell execution, or SSH code. |
-| Replaying a command after a lost acknowledgement | Mark startup before launch; retain the uncertain state and refuse automatic replay. |
+| Replaying a command after a lost acknowledgement | Mark startup before launch; retain the uncertain state and refuse automatic replay. Background reconnect uses attach-only control clients and never recreates a missing server. |
 
 These SSH controls use documented [OpenSSH options](https://man.openbsd.org/ssh_config.5);
 clipboard and passthrough settings follow the [tmux manual](https://man.openbsd.org/tmux.1).
@@ -62,7 +62,9 @@ An agent may authenticate outbound SSH locally without being forwarded.
   variables; those local settings remain the user's trust decision.
 - An unreachable remote host can delay an operation. Returning to the parent
   does not require a successful remote query, but a style update may take its
-  bounded timeout. Reconnect control with `up` after connectivity returns.
+  bounded timeout. Background workers automatically reattach after connectivity
+  returns; connection attempts and retries have deadlines/backoff. A shared
+  connection failure interrupts all channels using that master until recovery.
 
 ## Verification
 
@@ -70,9 +72,13 @@ Tests launch an unprivileged loopback OpenSSH server with temporary keys. They
 exercise actual SSH control and terminal streams, keyboard navigation, runtime
 remote edits, and reconnection without duplicate process launches. A permissive
 client configuration attempts agent/X11 forwarding, a local command, a shared
-master socket, and a local port forward; the application overrides prevent
-these. Tests also enable hostile remote clipboard/passthrough output and verify
+master socket, and a local port forward. A real pre-existing permissive master
+is established first; the application still creates an independent private
+master with forwarding disabled. Tests also enable hostile remote clipboard/passthrough output and verify
 that it does not escape the local root or execute displayed shell syntax.
+Tests count real SSH authentications to verify sharing and recovery, exercise
+idle expiry and stale socket replacement, and ensure channel exhaustion never
+opens another TCP connection. Unsafe socket paths and symlinks are rejected.
 An SSH exit test closes a remote branch while checking that the local shell's
 process survives. Local tests verify that unavailable rows are retained and
 that edits, detach, and shutdown in one named workspace leave another intact.

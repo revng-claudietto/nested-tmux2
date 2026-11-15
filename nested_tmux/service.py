@@ -65,11 +65,20 @@ def serve(config, state, ssh_config=None):
     private_directory(state.parent)
     private_directory(state)
     lock = (state / "controller.lock").open("a+")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as exc:
-        lock.close()
-        raise Error("a controller is already starting or running for this workspace") from exc
+    # stop removes its RPC listener before finishing control-channel cleanup.
+    # An immediate up must wait for that owner to release the lock.
+    lock_deadline = time.monotonic() + 15
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError as exc:
+            if time.monotonic() >= lock_deadline:
+                lock.close()
+                raise Error(
+                    "a controller is already starting or running for this workspace"
+                ) from exc
+            time.sleep(0.05)
     tree = Tree(config, state, ssh_config)
     server = socket.socket(socket.AF_UNIX)
     path = state / "rpc.sock"
@@ -90,6 +99,7 @@ def serve(config, state, ssh_config=None):
         next_reap = time.monotonic() + 0.5
         while running and not tree.closed:
             if time.monotonic() >= next_reap:
+                tree.reconnect()
                 tree.reap_exited()
                 next_reap = time.monotonic() + 0.5
                 if tree.closed:

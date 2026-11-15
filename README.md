@@ -270,14 +270,35 @@ while that workspace is still alive. Use a different name for an independent cop
 
 Quote remote paths containing `~` to prevent your local shell expanding them.
 
-The controller opens an SSH connection for each remote row's control stream;
-the visible remote subtree uses a separate SSH terminal connection. Deeper rows
-on that same host attach locally there. Alt+Up/Down and tab creation work as
-usual. Remote commands remain in remote tmux when the visible SSH connection
-drops. The terminal attachment retries automatically; run `nested-tmux up`
-again to reconnect control streams after a failure. Surviving processes are not
-restarted. Keep `name` and the local runtime directory stable to reconnect to
-the same remote servers. For a YAML workspace, pass its file to `up`.
+All SSH invocations for the same workspace and host alias share **one underlying
+SSH connection**, using a private OpenSSH `ControlMaster`. No SSH multiplexing
+configuration is needed. The connection stays open while any channel is in use,
+and for **five minutes after its last channel closes** (`ControlPersist=300`).
+Different workspace names and host aliases use separate masters.
+
+Each remote row has a persistent control channel (`ssh -T` running `tmux -C`).
+Each local-to-remote branch has a terminal channel (`ssh -tt` attaching to tmux).
+Deeper rows on that same host attach locally there. Cleanup commands also reuse
+the master. Pressing **Alt+Right** starts the small helper **locally**, which
+writes to the local controller socket. The controller writes `next-window` to
+the existing remote control channel: no new SSH connection, SSH channel, or
+remote process is started for that key press.
+
+After a connection drops, the controller reconnects in the background and the
+terminal attachment retries automatically. Failed control attempts back off
+from one second to a maximum of 30 seconds. Remote commands stay in tmux;
+recovery reattaches to surviving servers and never replays interrupted commands.
+Local rows remain available during background connection attempts. If the
+remote tmux server itself has disappeared (for example after a remote reboot),
+run `nested-tmux up` to explicitly recreate it. For a YAML workspace, pass its
+file to `up`. Keep the workspace name and local runtime directory stable to
+reconnect to the same remote servers.
+
+OpenSSH's server-side `MaxSessions` setting limits simultaneous channels on one
+connection; its default is 10. Count one channel per remote row, plus one per
+local-to-remote branch, and leave room for temporary cleanup/recovery channels.
+For larger trees, increase `MaxSessions` on that SSH server. Reaching the limit
+reports an error; the application does not silently open extra connections.
 
 Remote descendants stay on their branch's host. To use another host, create
 another branch under a local row. Use `ProxyJump` for network routing. Pass
@@ -305,7 +326,9 @@ To pick up a new application version for an existing workspace, run `stop`, then
 
 The runtime socket/log directory lives under `$XDG_RUNTIME_DIR` or a private
 `/tmp/nested-tmux-UID` directory. `--runtime-dir /private/path` overrides the base;
-use the same base for subsequent operations. Navigation focus is shared by
+use the same base for subsequent operations. SSH master socket paths must fit
+88 bytes and must not contain `%`, `$`, or `~`; use a short runtime directory if
+necessary. Navigation focus is shared by
 clients attached to the same workspace.
 
 If a transport fails during a command launch, the command may already have run.
@@ -334,7 +357,8 @@ wrapper gives the build user a valid login shell without editing system accounts
 Coverage includes real PTY keyboard input and visible rows, command quoting,
 runtime edits, named workspace isolation, shell exit and empty-branch cleanup,
 export and reinitialization, controller restart without duplicate
-launches, SSH reconnection, hostile terminal output, forwarding restrictions,
+launches, SSH reconnection, connection sharing and idle expiry, SSH channel limits,
+hostile terminal output, forwarding restrictions,
 bounded RPC/control messages, and the installed Nix executable and helpers.
 Native helper tests cover partial replies, malformed/oversized replies, missing
 controllers, sanitized diagnostics, and timeouts without retrying actions. The

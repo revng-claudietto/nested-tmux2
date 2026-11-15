@@ -11,7 +11,7 @@ from helpers import eventually
 
 
 class SSHServer:
-    def __init__(self, directory, allow_agent_forwarding=False):
+    def __init__(self, directory, allow_agent_forwarding=False, max_sessions=10):
         self.directory = directory
         self.sshd = shutil.which("sshd")
         if not self.sshd:
@@ -32,6 +32,8 @@ class SSHServer:
         self.server_config = directory / "sshd_config"
         self.server_config.write_text(f"""ListenAddress 127.0.0.1
 Port {self.port}
+LogLevel VERBOSE
+MaxSessions {max_sessions}
 HostKey {directory / "host"}
 PidFile {directory / "sshd.pid"}
 AuthorizedKeysFile {directory / "authorized_keys"}
@@ -81,13 +83,8 @@ SetEnv PATH={os.environ["PATH"]}
             env.update(
                 LD_PRELOAD=wrapper, NSS_WRAPPER_PASSWD=str(passwd), NSS_WRAPPER_GROUP=str(group)
             )
-        self.process = subprocess.Popen(
-            [self.sshd, "-D", "-e", "-f", str(self.server_config)],
-            stdin=subprocess.DEVNULL,
-            stdout=self.log,
-            stderr=self.log,
-            env=env,
-        )
+        self.env = env
+        self.resume()
         try:
             eventually(self.ready)
             probe = subprocess.run(
@@ -119,7 +116,27 @@ SetEnv PATH={os.environ["PATH"]}
         except OSError:
             return False
 
+    @property
+    def authentications(self):
+        return (self.directory / "sshd.log").read_text().count("Accepted publickey")
+
+    def pause(self):
+        if self.process.poll() is None:
+            self.process.terminate()
+            self.process.wait(timeout=5)
+
+    def resume(self):
+        if getattr(self, "process", None) is not None and self.process.poll() is None:
+            return
+        self.process = subprocess.Popen(
+            [self.sshd, "-D", "-e", "-f", str(self.server_config)],
+            stdin=subprocess.DEVNULL,
+            stdout=self.log,
+            stderr=self.log,
+            env=self.env,
+        )
+        eventually(self.ready)
+
     def close(self):
-        self.process.terminate()
-        self.process.wait(timeout=5)
+        self.pause()
         self.log.close()

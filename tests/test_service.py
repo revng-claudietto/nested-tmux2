@@ -52,13 +52,28 @@ class ServiceCase(TreeCase):
                 timeout=15,
             )
         tree.close()
+        # Runtime-added/removed hosts may no longer appear in the initial YAML.
+        # Stop only master sockets inside this test's private workspace.
+        from nested_tmux.ssh import SSHMaster
+
+        for path in self.state.glob("s-*"):
+            if path.is_socket():
+                master = SSHMaster(self.state, "nt-test-host", self.ssh_config)
+                master.path = path
+                master.stop()
 
     def tmux(self, path, *args):
         from nested_tmux.control import Transport
+        from nested_tmux.ssh import SSHMaster
 
         row = next(row for row in self.status["rows"] if row["path"] == path)
+        master = (
+            SSHMaster(self.state, row["host"], self.ssh_config) if row["host"] != "local" else None
+        )
         result = subprocess.run(
-            Transport(row["host"], self.ssh_config).wrap(["tmux", "-L", row["socket"], *args]),
+            Transport(row["host"], self.ssh_config, master).wrap(
+                ["tmux", "-L", row["socket"], *args]
+            ),
             env=clean_env(),
             text=True,
             capture_output=True,

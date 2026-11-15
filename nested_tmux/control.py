@@ -2,12 +2,14 @@
 
 import os
 import queue
-import shlex
+import select
 import subprocess
 import threading
+import time
 from collections import deque
 
 from .config import Error
+from .ssh import Transport, clean_env  # noqa: F401 - retain the public transport imports
 
 MAX_LINE = 65536
 MAX_RESPONSE = 1024 * 1024
@@ -36,54 +38,6 @@ def command(*args):
     return " ".join(quote(arg) for arg in args)
 
 
-def clean_env():
-    return {k: v for k, v in os.environ.items() if k not in {"TMUX", "TMUX_PANE", "TMUX_PARENT"}}
-
-
-class Transport:
-    def __init__(self, host="local", ssh_config=None):
-        self.host = host
-        self.ssh_config = ssh_config
-
-    def wrap(self, args, terminal=False):
-        if self.host == "local":
-            return args
-        ssh = [
-            "ssh",
-            "-tt" if terminal else "-T",
-            "-a",
-            "-x",
-            "-e",
-            "none",
-            "-o",
-            "ForwardAgent=no",
-            "-o",
-            "ForwardX11=no",
-            "-o",
-            "ClearAllForwardings=yes",
-            "-o",
-            "PermitLocalCommand=no",
-            "-o",
-            "ControlMaster=no",
-            "-o",
-            "ControlPath=none",
-            "-o",
-            "ControlPersist=no",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=10",
-            "-o",
-            "ServerAliveInterval=10",
-            "-o",
-            "ServerAliveCountMax=3",
-        ]
-        if self.ssh_config:
-            ssh += ["-F", str(self.ssh_config)]
-        # ssh joins arguments with spaces; transmit exactly one shell-quoted command.
-        return ssh + ["--", self.host, "exec " + shlex.join(args)]
-
-
 class Control:
     def __init__(self, transport, socket_name, timeout=15):
         self.transport = transport
@@ -95,7 +49,22 @@ class Control:
         self.threads = []
 
     def connect(self, create=True):
+        for attempt in range(3):
+            try:
+                self._connect(create)
+                return
+            except TransportError as exc:
+                if not create or "server exited unexpectedly" not in str(exc) or attempt == 2:
+                    raise
+                # kill-server can acknowledge before its listener disappears.
+                # Only the idempotent bootstrap new-session -A is retried here;
+                # no user launch command has been sent. Recovery is attach-only.
+                time.sleep(0.05 * (attempt + 1))
+
+    def _connect(self, create):
         self.close()
+        if self.transport.master:
+            self.transport.master.ensure()
         self.lines = queue.Queue(maxsize=MAX_QUEUED_LINES)
         self.errors = deque(maxlen=20)
         args = ["tmux", "-u", "-L", self.socket_name, "-f", "/dev/null", "-C"]
@@ -117,31 +86,62 @@ class Control:
         )
         process, lines, errors = self.process, self.lines, self.errors
 
-        def read_stdout():
+        stop = self.reader_stop = threading.Event()
+
+        def read(stream, limit, stdout=False):
+            pending = b""
+            fd = stream.fileno()
+            os.set_blocking(fd, False)
             try:
-                while line := process.stdout.readline(MAX_LINE + 1):
-                    if len(line) > MAX_LINE:
-                        errors.append("remote control line exceeds size limit")
-                        process.terminate()
+                while not stop.is_set():
+                    if not select.select([fd], [], [], 0.1)[0]:
+                        if process.poll() is not None:
+                            break
+                        continue
+                    chunk = os.read(fd, 4096)
+                    if not chunk:
                         break
-                    try:
-                        lines.put_nowait(line.rstrip("\r\n"))
-                    except queue.Full:
-                        errors.append("remote control notification queue exceeds size limit")
-                        process.terminate()
-                        break
+                    pending += chunk
+                    while pending:
+                        end = pending.find(b"\n")
+                        if end < 0 and len(pending) <= limit:
+                            break
+                        if stdout and (end > limit or (end < 0 and len(pending) > limit)):
+                            errors.append("remote control line exceeds size limit")
+                            process.terminate()
+                            return
+                        count = end + 1 if 0 <= end <= limit else min(len(pending), limit)
+                        line, pending = pending[:count], pending[count:]
+                        text = line.decode("utf-8", errors="replace").rstrip("\r\n")
+                        if stdout:
+                            try:
+                                lines.put_nowait(text)
+                            except queue.Full:
+                                errors.append(
+                                    "remote control notification queue exceeds size limit"
+                                )
+                                process.terminate()
+                                return
+                        else:
+                            errors.append(text)
+                if pending and not stdout:
+                    errors.append(pending.decode("utf-8", errors="replace"))
             finally:
-                try:
-                    lines.put_nowait(None)
-                except queue.Full:
-                    lines.get_nowait()
-                    lines.put_nowait(None)
+                if stdout:
+                    while True:
+                        try:
+                            lines.put_nowait(None)
+                            break
+                        except queue.Full:
+                            try:
+                                lines.get_nowait()
+                            except queue.Empty:
+                                pass
 
-        def read_stderr():
-            while line := process.stderr.readline(4096):
-                errors.append(line.rstrip())
-
-        self.threads = [threading.Thread(target=f, daemon=True) for f in (read_stdout, read_stderr)]
+        self.threads = [
+            threading.Thread(target=read, args=(process.stdout, MAX_LINE, True), daemon=True),
+            threading.Thread(target=read, args=(process.stderr, 4096), daemon=True),
+        ]
         for thread in self.threads:
             thread.start()
         try:
@@ -152,8 +152,6 @@ class Control:
             raise
 
     def _response(self, timeout=None):
-        import time
-
         deadline = time.monotonic() + (self.timeout if timeout is None else timeout)
         block = None
         output = []
@@ -192,6 +190,10 @@ class Control:
                 raise TransportError("remote control response exceeds size limit")
             output.append(line)
 
+    @property
+    def connected(self):
+        return self.process is not None and self.process.poll() is None
+
     def call(self, *args, timeout=None):
         if self.process is None or self.process.poll() is not None:
             raise Error(f"tmux control is not connected on {self.transport.host}")
@@ -211,14 +213,22 @@ class Control:
         if process is None:
             return
         self.process = None
+        self.reader_stop.set()
         if process.poll() is None:
-            process.terminate()
+            # Ask the persistent remote tmux client to release its mux channel.
+            # A broken/stalled channel must never block local shutdown.
             try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+                os.set_blocking(process.stdin.fileno(), False)
+                os.write(process.stdin.fileno(), b"detach-client\n")
+                process.wait(timeout=0.25)
+            except (OSError, subprocess.TimeoutExpired):
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
         for thread in self.threads:
-            thread.join(timeout=2)
+            thread.join()
         for stream in (process.stdin, process.stdout, process.stderr):
             stream.close()
