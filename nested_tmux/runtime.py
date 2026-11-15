@@ -134,7 +134,11 @@ class Tree:
             "prefix": "None",
             "prefix2": "None",
             "mouse": "off",
-            "status-left": f"[{self.config.name}] " if row is self.root else "",
+            "status-left": (
+                f"[{self.config.name}] "
+                if row is self.root and self.config.name != "default"
+                else ""
+            ),
             "status-left-length": "40",
             "status-right": "",
             "status-style": "bg=colour237,fg=colour255",
@@ -279,7 +283,7 @@ class Tree:
             ctl.call("bind-key", "-T", "prefix", key, "run-shell", script)
         ctl.call("bind-key", "-T", "prefix", "d", "detach-client")
         ctl.call("bind-key", "-T", "prefix", "a", "send-prefix")
-        for key, operation in {"C-s": "row", "A": "rename"}.items():
+        for key, operation in {"C-s": "row", "C-r": "ssh-row", "A": "rename"}.items():
             script = shlex.join(launcher("_prompt", self.state, operation)).replace("#", "##")
             ctl.call(
                 "bind-key",

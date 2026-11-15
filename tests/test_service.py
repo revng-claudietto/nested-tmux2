@@ -190,7 +190,7 @@ class ServiceTests(ServiceCase):
                 == f"0:{shell_name}"
             )
         )
-        self.assertEqual(self.tmux("work", "show-options", "-gv", "status-left"), "[default]")
+        self.assertEqual(self.tmux("work", "show-options", "-gv", "status-left"), "")
         os.write(terminal, b"\x14")
         eventually(lambda: len(request(self.state, "status")["rows"][0]["windows"]) == 2)
         eventually(

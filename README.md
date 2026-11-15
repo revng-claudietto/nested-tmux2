@@ -15,6 +15,10 @@ file is needed. Run it from a plain terminal, then build your tree as you work:
 5. **Ctrl+a, x** closes the selected terminal or entire branch after confirmation.
 6. **Ctrl+a, d** detaches and keeps everything running. Run the same command to reconnect.
 
+To open an SSH branch, focus a local row and press **Ctrl+a, Ctrl+r**. Enter a
+branch name, an SSH host alias, and an optional remote directory (default `~`).
+See the SSH setup instructions below for authentication and host-key setup.
+
 Tabs start at **0** and use tmux's automatic names, such as `bash` or `vim`,
 following the foreground program. Use **Ctrl+a, A** to give a tab a fixed name.
 
@@ -26,7 +30,8 @@ nix run github:revng-claudietto/nested-tmux2 -- --name personal
 ```
 
 Run the same command to reconnect to that named workspace. Omit `--name` to use
-`default`. The outer row displays the workspace name.
+`default`. The outer row displays explicit workspace names such as `[work]`;
+the default workspace has no name label.
 From a local checkout, use `nix run . -- --name work`.
 To terminate a whole workspace from another terminal:
 
@@ -73,6 +78,7 @@ does not modify that outer server.
 | Alt+Down | Return to the parent row |
 | Ctrl+t or Ctrl+a, Ctrl+c | New regular terminal |
 | Ctrl+a, Ctrl+s | New child row; prompt for its ID |
+| Ctrl+a, Ctrl+r | New SSH child row; prompt for ID, host alias, and remote cwd |
 | Ctrl+a, Ctrl+a | Last tab |
 | Ctrl+a, A | Rename the selected terminal or child row |
 | Ctrl+a, x | Remove the selected terminal or entire child row, with confirmation |
@@ -193,6 +199,8 @@ Use the keyboard shortcuts for ordinary tab/row creation and removal.
 
 Export includes managed rows and terminals, IDs, titles, hosts, environments,
 configured launch commands, and each terminal's current cwd when available.
+This includes all managed remote branches: their SSH host aliases and cwd values
+queried from tmux on the remote host.
 Only explicitly assigned titles are exported; automatic names remain automatic
 when the tree is restored. Generated IDs such as `shell-2` identify terminals
 in CLI paths and YAML independently of their displayed program names.
@@ -225,7 +233,10 @@ while that workspace is still alive. Use a different name for an independent cop
    Connections made by nested-tmux use batch mode, so they cannot prompt for
    passwords or unknown host keys. A local SSH agent can authenticate the
    connection; it is not forwarded.
-4. Add a remote branch to your running workspace:
+4. Focus a local row and press **Ctrl+a, Ctrl+r**. Enter a branch name such as
+   `server`, the SSH alias `devbox`, and a remote directory such as `~/src/project`
+   (leave it empty for the remote home directory). The new branch is selected
+   automatically. The same operation is available from the CLI:
 
    ```sh
    nested-tmux add-row server --parent work --host devbox --cwd '~/src/project'

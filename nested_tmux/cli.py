@@ -113,7 +113,7 @@ def main(argv=None):
     rpc.add_argument("action")
     prompt = sub.add_parser("_prompt")
     prompt.add_argument("state", type=Path)
-    prompt.add_argument("action", choices=("row", "rename"))
+    prompt.add_argument("action", choices=("row", "ssh-row", "rename"))
     if argv[0] in sub.choices:
         # Keep flags valid between the optional YAML file and required targets.
         args = sub.choices[argv[0]].parse_intermixed_args(argv[1:])
@@ -125,10 +125,18 @@ def main(argv=None):
             request(args.state, "nav", action=args.action)
             return 0
         if args.op == "_prompt":
-            if args.action == "row":
+            if args.action in {"row", "ssh-row"}:
                 ident = input("New row id (letters, digits, _ or -): ").strip()
                 if ident:
-                    request(args.state, "add", node={"id": ident, "children": [{"id": "shell"}]})
+                    node = {"id": ident, "children": [{"id": "shell"}]}
+                    if args.action == "ssh-row":
+                        host = input("SSH host alias (empty to cancel): ").strip()
+                        if not host:
+                            return 0
+                        node["host"] = host
+                        node["cwd"] = input("Remote cwd [~]: ").strip() or "~"
+                        print("Opening SSH branch...", flush=True)
+                    request(args.state, "add", node=node)
             else:
                 title = input("New title: ").strip()
                 if title:
@@ -205,4 +213,9 @@ def main(argv=None):
         # Remote diagnostics are data, never terminal control sequences.
         diagnostic = re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", "?", str(exc))
         print(f"nested-tmux: {diagnostic}", file=sys.stderr)
+        if args.op == "_prompt":
+            try:
+                input("Press Enter to close.")
+            except (EOFError, KeyboardInterrupt):
+                pass
         return 1

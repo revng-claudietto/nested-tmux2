@@ -2,6 +2,7 @@ import os
 import shlex
 import socket
 import subprocess
+import time
 
 from helpers import eventually, fixture
 from ssh_server import SSHServer
@@ -41,6 +42,42 @@ class SSHTests(ServiceCase):
         self.assertEqual(self.tmux("work", "display-message", "-p", "#{pane_pid}"), local_pid)
         self.assertEqual(
             [n["id"] for n in request(self.state, "dump")["root"]["children"]], ["shell"]
+        )
+
+    def test_remote_branch_shortcut_and_dump_live_cwd(self):
+        server = self.server()
+        self.launch(ssh_config=server.client_config)
+        terminal = self.attach_pty()
+        os.write(terminal, b"\x01\x12")  # Ctrl+a, Ctrl+r
+        eventually(lambda: b"New row id" in self.output)
+        os.write(terminal, b"remote\r")
+        eventually(lambda: b"SSH host alias" in self.output)
+        os.write(terminal, b"nt-test-host\r")
+        eventually(lambda: b"Remote cwd" in self.output)
+        os.write(terminal, (str(self.directory) + "\r").encode())
+        eventually(lambda: request(self.state, "status")["active"] == "work/remote")
+        self.status = request(self.state, "status")
+        time.sleep(0.2)  # Let the popup close before sending shell input.
+        cwd = self.directory / "remote cwd"
+        cwd.mkdir()
+        os.write(terminal, ("cd " + shlex.quote(str(cwd)) + "\r").encode())
+        eventually(
+            lambda: (
+                self.tmux("work/remote", "display-message", "-p", "#{pane_current_path}")
+                == str(cwd)
+            )
+        )
+        remote = request(self.state, "dump")["root"]["children"][-1]
+        self.assertEqual(remote["host"], "nt-test-host")
+        self.assertEqual(remote["children"][0]["cwd"], str(cwd))
+        self.assertEqual(remote["children"][0]["id"], "shell")
+        # Disconnect its control stream: export still contains the remote tree,
+        # with the configured launch cwd as fallback instead of guessing.
+        self.tmux("work/remote", "detach-client", "-a")
+        unavailable = request(self.state, "dump")["root"]["children"][-1]
+        self.assertEqual(unavailable["host"], "nt-test-host")
+        self.assertEqual(
+            unavailable["children"][0].get("cwd", unavailable["cwd"]), str(self.directory)
         )
 
     def test_runtime_remote_row_add_dump_and_remove(self):

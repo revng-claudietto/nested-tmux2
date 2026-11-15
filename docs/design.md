@@ -9,7 +9,8 @@ servers. A leaf window runs the user's command.
 ```mermaid
 flowchart LR
     K[Keyboard] --> R[Local root tmux]
-    R -- private Unix socket RPC --> C[Local controller]
+    R -- run-shell --> H[Short-lived local Python helper]
+    H -- private Unix socket RPC --> C[Persistent local Python daemon]
     C -- tmux control mode --> L[Local child rows]
     C -- outbound SSH: control mode --> S[Remote tmux rows]
     R -- nested terminal attachment --> L
@@ -21,6 +22,23 @@ control connection and updates row colors. A remote row never asks a local row
 to run anything. The terminal's ordinary input/output is separate from the
 control stream. Each branch has its own socket namespace, isolated from the
 user's existing tmux sessions and configuration.
+
+There is one long-running Python daemon per named workspace. It owns the live
+tree and keeps one `tmux -C` process connected to each row, using persistent SSH
+connections for remote rows. A navigation binding starts a short-lived local
+Python helper, which sends an action such as `right` to the daemon's Unix socket,
+waits for the reply, and exits. The daemon translates that action into tmux
+commands such as `next-window -t tree` and writes them to the existing control
+process's stdin; framed replies arrive on stdout. Ordinary typing and terminal
+rendering go through tmux directly. Native bindings such as detach also stay in
+tmux. The remote host needs tmux and SSH, with no Python daemon installed there.
+
+Starting a Python helper for each navigation action adds interpreter/import
+overhead. The controller and its tmux/SSH connections are reused, so navigation
+does not relaunch the daemon or establish a new SSH connection. Remote round
+trips and serialized controller work can add latency, especially for operations
+that query several rows. A small dedicated socket client could reduce helper
+startup cost without changing the controller protocol.
 
 ## Why these interfaces
 
