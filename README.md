@@ -125,13 +125,31 @@ nested-tmux down --name work
 
 ## Optional YAML initialization
 
-If you want a specific tree after reboot, you can initialize it from YAML:
+To initialize a named workspace automatically after reboot, save its recipe as
+`~/.config/nested-tmux2/work.yaml`, then start it as usual:
+
+```sh
+nix run github:revng-claudietto/nested-tmux2 -- --name work
+```
+
+Lookup follows the [XDG Base Directory specification](https://specifications.freedesktop.org/basedir/latest/):
+`$XDG_CONFIG_HOME/nested-tmux2/` first (default `~/.config/nested-tmux2/`),
+then `nested-tmux2/` under each directory in `$XDG_CONFIG_DIRS` (default `/etc/xdg`).
+Relative XDG paths are ignored. Within each directory, `<name>.yaml` takes
+precedence over `<name>.yml`; the first matching file wins, without merging.
+Without `--name`, the filename is `default.yaml` (or `default.yml`). No matching
+file means one shell in the current directory, as before.
+
+For discovered files, `name` is optional: the selected workspace name takes
+precedence over any name in the file. Invalid recipes report an error.
+An explicit YAML path overrides automatic lookup:
 
 ```sh
 nix run github:revng-claudietto/nested-tmux2 -- up work.yaml --attach
 ```
 
-For example, save this as `work.yaml` and adjust the project directory:
+For example, save this as `~/.config/nested-tmux2/work.yaml` for automatic
+lookup, or as `work.yaml` for the explicit command above, and adjust the project directory:
 
 ```yaml
 name: development
@@ -180,6 +198,14 @@ initializes a separate workspace from the same recipe. Subsequent commands can
 select it with `--name experiment` without supplying the YAML file.
 
 ## Edit and export at runtime
+
+To use the current tree as the next startup recipe for a named workspace:
+
+```sh
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/nested-tmux2"
+nix run github:revng-claudietto/nested-tmux2 -- dump --name work \
+  -o "${XDG_CONFIG_HOME:-$HOME/.config}/nested-tmux2/work.yaml"
+```
 
 To save a workspace you built by hand:
 

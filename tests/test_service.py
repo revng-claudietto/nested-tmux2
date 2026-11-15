@@ -125,6 +125,65 @@ class ServiceCase(TreeCase):
 
 
 class ServiceTests(ServiceCase):
+    def test_discovered_recipe_start_dump_and_live_tree_restart(self):
+        from nested_tmux.runtime import launcher
+
+        config_home = self.directory / "config"
+        recipe = config_home / "nested-tmux2" / "work.yaml"
+        recipe.parent.mkdir(parents=True)
+        recipe.write_text(
+            yaml.safe_dump(
+                {
+                    "root": {
+                        "id": "desk",
+                        "cwd": str(self.directory),
+                        "children": [
+                            {"id": "job", "command": ["cat"]},
+                        ],
+                    }
+                }
+            )
+        )
+        self.config = load(recipe, name="work")
+        self.state = state_path("work", self.directory)
+        self.ssh_config = None
+        self.addCleanup(self.cleanup_service)
+        binary = os.environ.get("NESTED_TMUX_TEST_BINARY")
+        command = [binary] if binary else launcher()
+
+        def cli(*args):
+            result = subprocess.run(
+                [*command, *args, "--name", "work", "--runtime-dir", str(self.directory)],
+                env={**clean_env(), "XDG_CONFIG_HOME": str(config_home)},
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout
+
+        self.status = json.loads(cli("up"))
+        self.assertEqual(self.status["rows"][0]["path"], "desk")
+        self.assertEqual(
+            self.tmux("desk", "display-message", "-p", "#{pane_current_path}"), str(self.directory)
+        )
+        self.assertEqual(
+            self.tmux("desk", "display-message", "-p", "#{pane_current_command}"), "cat"
+        )
+        cli("add-terminal", "extra", "--command", "cat")
+        before = self.tmux("desk", "list-panes", "-a", "-F", "#{pane_pid}")
+        cli("dump", "-o", str(recipe))
+        self.assertEqual(load(recipe).name, "work")
+        self.assertEqual(len(load(recipe).root.children), 2)
+        cli("stop")
+        eventually(lambda: not (self.state / "rpc.sock").exists())
+        self.status = json.loads(cli("up"))
+        self.assertEqual(self.tmux("desk", "list-panes", "-a", "-F", "#{pane_pid}"), before)
+        cli("down")
+        eventually(lambda: not (self.state / "rpc.sock").exists())
+        self.status = json.loads(cli("up"))
+        self.assertEqual(len(self.status["rows"][0]["windows"]), 2)
+
     def test_native_automatic_names_and_manual_rename_survive_restart(self):
         data = fixture()
         data["root"]["children"][0] = {"id": "shell"}

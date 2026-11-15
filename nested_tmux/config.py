@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,12 +78,42 @@ def as_data(config):
     return {"name": config.name, "root": visit(config.root)}
 
 
+def workspace_name(value):
+    name = string(value, "name")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+        raise Error("name must contain only letters, digits, underscores or hyphens")
+    return name
+
+
+def discover(name):
+    """Find a workspace recipe in XDG precedence order, never in the cwd."""
+    workspace_name(name)  # Validate before constructing a filesystem path.
+    home = Path(os.environ.get("XDG_CONFIG_HOME", ""))
+    if not home.is_absolute():
+        home = Path.home() / ".config"
+    directories = [
+        home,
+        *map(Path, (os.environ.get("XDG_CONFIG_DIRS") or "/etc/xdg").split(os.pathsep)),
+    ]
+    for directory in directories:
+        if not directory.is_absolute():
+            continue
+        for extension in ("yaml", "yml"):
+            path = directory / "nested-tmux2" / f"{name}.{extension}"
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                continue
+            # Invalid recipes, dangling symlinks and unreadable files must fail
+            # visibly rather than silently starting a different configuration.
+            return path
+    return None
+
+
 def parse(data):
     if not isinstance(data, dict) or set(data) - {"name", "root"}:
         raise Error("configuration must contain only name and root")
-    name = string(data.get("name"), "name")
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
-        raise Error("name must contain only letters, digits, underscores or hyphens")
+    name = workspace_name(data.get("name"))
 
     count = 0
 
@@ -167,7 +198,7 @@ def parse(data):
     return Config(name, root, hashlib.sha256(canonical.encode()).hexdigest())
 
 
-def load(path):
+def load(path, *, name=None):
     path = Path(path)
     try:
 
@@ -190,6 +221,8 @@ def load(path):
         if path.stat().st_size > 1024 * 1024:
             raise Error("configuration is larger than 1 MiB")
         data = yaml.load(path.read_text(), Loader=Loader)
+        if name is not None and isinstance(data, dict):
+            data = {**data, "name": name}
         return parse(data)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         raise Error(f"{path}: {exc}") from exc

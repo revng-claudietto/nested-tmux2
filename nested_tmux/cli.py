@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 
-from .config import Error, as_data, load, parse
+from .config import Error, discover, load, parse
 from .control import clean_env
 from .runtime import Tree, launcher
 from .service import private_directory, request, serve, state_path
@@ -74,7 +74,7 @@ def main(argv=None):
             "config",
             type=Path,
             nargs="?",
-            help="optional YAML initialization",
+            help="YAML initialization (default: look up workspace name in XDG config directories)",
         )
         p.add_argument("--runtime-dir", type=Path)
         p.add_argument("--ssh-config", type=Path)
@@ -88,7 +88,7 @@ def main(argv=None):
             "config",
             type=Path,
             nargs="?",
-            help="optional YAML initialization",
+            help="YAML initialization (default: look up workspace name in XDG config directories)",
         )
         p.add_argument("--runtime-dir", type=Path)
         if op in {"remove", "rename"}:
@@ -142,18 +142,21 @@ def main(argv=None):
                 if title:
                     request(args.state, "rename", title=title)
             return 0
+        name = selection.name
+        config_path = args.config
+        if config_path is None:
+            name = name if name is not None else "default"
+            config_path = discover(name)
         config = (
-            load(args.config)
-            if args.config
+            load(config_path, name=name)
+            if config_path is not None
             else parse(
                 {
-                    "name": "default",
+                    "name": name,
                     "root": {"id": "work", "cwd": os.getcwd(), "children": [{"id": "shell"}]},
                 }
             )
         )
-        if selection.name is not None:
-            config = parse({**as_data(config), "name": selection.name})
         state = state_path(config.name, args.runtime_dir)
         if args.op == "check":
             print(f"{config.name}: valid ({sum(n.branch for n in config.root.walk())} rows)")
@@ -166,7 +169,10 @@ def main(argv=None):
             return 0
         if args.op in {"up", "attach"}:
             result = start(
-                config, args.config.resolve() if args.config else None, state, ssh_config
+                config,
+                config_path.resolve() if config_path is not None else None,
+                state,
+                ssh_config,
             )
             if args.op == "attach" or args.attach:
                 # A dedicated root server, never the invoking user's current server.

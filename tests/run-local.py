@@ -40,6 +40,9 @@ if __name__ == "__main__":
     before = invoking_server_snapshot()
     original_path = os.environ["PATH"]
     with tempfile.TemporaryDirectory(prefix="nt-key-test-") as directory:
+        # Automatic recipe discovery must never read the invoking user's recipes.
+        os.environ["XDG_CONFIG_HOME"] = str(Path(directory) / "config")
+        os.environ["XDG_CONFIG_DIRS"] = str(Path(directory) / "system-config")
         if not shutil.which("nested-tmux-key"):
             from native_helper import build_helper
 

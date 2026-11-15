@@ -13,6 +13,12 @@ local tmux server are trusted. YAML commands intentionally execute with the
 user's privileges on the specified host. Only load configurations you trust.
 YAML parsing uses a restricted SafeLoader with duplicate-key rejection; this
 prevents object constructors, not the intentional execution of `command`.
+Automatic recipes are read only from local XDG configuration directories, never
+from the current working directory or a remote host. Workspace names are
+validated before constructing paths. User recipes take precedence over system
+recipes; an invalid selected recipe fails rather than falling back to another.
+Configuration symlinks are supported, including Nix-managed configuration files;
+their targets are part of the trusted local configuration.
 
 The remote account/server and its stdout/stderr may be hostile. Other processes
 running as the same local Unix user are **not** isolated: they can use local
