@@ -416,6 +416,7 @@ class Tree:
             return shlex.join(args).replace("#", "##")
 
         ctl.call("set-option", "-g", "prefix", "C-a")
+        ctl.call("set-option", "-s", "extended-keys", "on")
         for key, action in {
             "M-Up": "up",
             "M-Down": "down",
@@ -426,6 +427,10 @@ class Tree:
             ctl.call("bind-key", "-T", "root", key, "run-shell", key_script(action))
         for key, action in {"C-c": "new", "c": "new", "C-a": "last", "[": "copy"}.items():
             ctl.call("bind-key", "-T", "prefix", key, "run-shell", key_script(action))
+        for index in range(10):
+            script = key_script(f"select-{index}")
+            ctl.call("bind-key", "-T", "root", f"C-M-{index}", "run-shell", script)
+            ctl.call("bind-key", "-T", "prefix", str(index), "run-shell", script)
         ctl.call("bind-key", "-T", "prefix", "d", "detach-client")
         ctl.call("bind-key", "-T", "prefix", "a", "send-prefix")
         for key, operation in {"C-s": "row", "C-r": "ssh-row", "A": "rename"}.items():
@@ -493,6 +498,8 @@ class Tree:
                 "-t",
                 "tree",
             )
+        elif action in {f"select-{index}" for index in range(10)}:
+            ctl.call("select-window", "-t", f"tree:{action[-1]}")
         elif action == "new":
             used = {child.path.rsplit("/", 1)[-1] for child in row.node.children}
             ident, number = "shell", 2

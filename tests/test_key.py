@@ -19,7 +19,7 @@ class KeyTests(unittest.TestCase):
         cls.short_deadline = build_helper(cls.temp.name, timeout_ms=150)
         cls.binary = shutil.which("nested-tmux-key") or cls.short_deadline
 
-    def exchange(self, chunks, *, binary=None, delay=0):
+    def exchange(self, chunks, *, binary=None, delay=0, action="right"):
         with tempfile.TemporaryDirectory(prefix="nt-key-socket-") as directory:
             path = str(Path(directory) / "rpc.sock")
             with socket.socket(socket.AF_UNIX) as server:
@@ -48,7 +48,7 @@ class KeyTests(unittest.TestCase):
                 thread.start()
                 start = time.monotonic()
                 result = subprocess.run(
-                    [str(binary or self.binary), path, "right"],
+                    [str(binary or self.binary), path, action],
                     capture_output=True,
                     timeout=3,
                 )
@@ -56,8 +56,14 @@ class KeyTests(unittest.TestCase):
                 thread.join(timeout=4)
                 self.assertFalse(thread.is_alive())
                 self.assertEqual(errors, [])
-                self.assertEqual(received, [{"op": "key", "action": "right"}])
+                self.assertEqual(received, [{"op": "key", "action": action}])
                 return result, elapsed
+
+    def test_numbered_tab_actions(self):
+        for index in range(10):
+            with self.subTest(index=index):
+                result, _ = self.exchange([b"OK\n"], action=f"select-{index}")
+                self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_fragmented_success_and_sanitized_errors(self):
         result, _ = self.exchange([b"O", b"K", b"\n"], delay=0.01)
@@ -88,6 +94,8 @@ class KeyTests(unittest.TestCase):
                 (str(Path(directory) / "absent.sock"), "right"),
                 ("x" * 200, "right"),
                 (str(Path(directory) / "absent.sock"), 'right";touch /tmp/invalid'),
+                (str(Path(directory) / "absent.sock"), "select-10"),
+                (str(Path(directory) / "absent.sock"), "select-1;kill-server"),
             ]:
                 with self.subTest(action=action, path=path):
                     result = subprocess.run(

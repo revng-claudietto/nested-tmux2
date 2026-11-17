@@ -103,6 +103,7 @@ already attached terminal takes precedence over a startup size hint.
 | Key | Action in the active row |
 | --- | --- |
 | Alt+Left / Alt+Right | Previous / next tab |
+| Ctrl+Alt+0–9 or Ctrl+a, 0–9 | Select the displayed tab number in the active row |
 | Alt+Up | Enter the selected child row |
 | Alt+Down | Return to the parent row |
 | Ctrl+t or Ctrl+a, Ctrl+c | New regular terminal |
@@ -118,6 +119,10 @@ already attached terminal takes precedence over a startup size hint.
 The active row's selected tab is green; other rows' selected tabs are gray.
 Ordinary typing reaches the deepest visible terminal, as with nested tmux.
 The local outer server owns the shortcuts even when the active row is remote.
+Ctrl+Alt+digits requires a terminal that sends distinct
+[extended key sequences](https://github.com/tmux/tmux/wiki/Modifier-Keys#extended-keys).
+Extended keys are enabled in the outer server; use **Ctrl+a, digit** if your
+terminal or desktop intercepts the combination or cannot encode it.
 
 To close a branch, press **Alt+Down** to focus its parent row, keep that branch
 selected, then press **Ctrl+a, x** and confirm with **y**. This terminates every

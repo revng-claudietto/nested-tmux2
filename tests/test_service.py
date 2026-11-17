@@ -21,6 +21,37 @@ from nested_tmux.service import request, state_path
 
 
 class ServiceCase(TreeCase):
+    def check_numbered_tab_shortcuts(self, host="local", ssh_config=None):
+        data = fixture()
+        data["root"]["children"][1] = {
+            "id": "project",
+            "host": host,
+            "children": [{"id": f"tab-{index}", "command": ["cat"]} for index in range(10)],
+        }
+        self.launch(data, ssh_config)
+        terminal = self.attach_pty()
+        # CSI u encoding of Ctrl+Alt+1 selects tab 1 in the outer row.
+        os.write(terminal, b"\x1b[49;7u")
+        eventually(
+            lambda: self.tmux("work", "display-message", "-p", "#{window_name}") == "project"
+        )
+        os.write(terminal, b"\x1b[1;3A")
+        eventually(lambda: request(self.state, "status")["active"] == "work/project")
+        for encoding in ("\x1b[{code};7u", "\x1b[27;7;{code}~", "\x01{digit}"):
+            for index in reversed(range(10)):
+                with self.subTest(host=host, encoding=repr(encoding), index=index):
+                    os.write(terminal, encoding.format(code=48 + index, digit=index).encode())
+                    eventually(
+                        lambda: (
+                            self.tmux("work/project", "display-message", "-p", "#{window_index}")
+                            == str(index)
+                        )
+                    )
+                    self.assertEqual(request(self.state, "status")["active"], "work/project")
+                    self.assertEqual(
+                        self.tmux("work", "display-message", "-p", "#{window_name}"), "project"
+                    )
+
     def launch(self, data=None, ssh_config=None):
         self.config_path = self.directory / "workspace.yaml"
         self.config_path.write_text(yaml.safe_dump(data or fixture()))
@@ -126,6 +157,9 @@ class ServiceCase(TreeCase):
 
 
 class ServiceTests(ServiceCase):
+    def test_numbered_tab_shortcuts_follow_active_row(self):
+        self.check_numbered_tab_shortcuts()
+
     def test_new_tabs_inherit_live_cwd_and_keep_shell_label(self):
         self.launch(
             {
@@ -670,7 +704,13 @@ class ServiceTests(ServiceCase):
 
     def test_keyboard_acknowledgement_and_errors(self):
         self.launch()
-        for action, expected in [("right", b"OK\n"), ("unknown\u001b[31m", b"ERR ")]:
+        for action, expected in [
+            ("right", b"OK\n"),
+            ("select-9", b"ERR "),  # An absent tab leaves selection and focus unchanged.
+            ("select-10", b"ERR "),
+            ("select-1;kill-server", b"ERR "),
+            ("unknown\u001b[31m", b"ERR "),
+        ]:
             with socket.socket(socket.AF_UNIX) as sock:
                 sock.connect(str(self.state / "rpc.sock"))
                 sock.sendall(json.dumps({"op": "key", "action": action}).encode() + b"\n")

@@ -15,6 +15,10 @@ from nested_tmux.ssh import SSHMaster
 
 
 class SSHTests(ServiceCase):
+    def test_numbered_tab_shortcuts_follow_remote_active_row(self):
+        server = self.server()
+        self.check_numbered_tab_shortcuts(host="nt-test-host", ssh_config=server.client_config)
+
     def server(self, **options):
         ssh_directory = self.directory / "ssh"
         ssh_directory.mkdir(mode=0o700)

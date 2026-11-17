@@ -154,7 +154,11 @@ def main(argv=None):
                 p.add_argument("--command")
     nav = sub.add_parser("nav", parents=[selector])
     nav.add_argument("config", type=Path, nargs="?")
-    nav.add_argument("action", choices=("up", "down", "left", "right", "new", "last", "copy"))
+    nav.add_argument(
+        "action",
+        choices=("up", "down", "left", "right", "new", "last", "copy")
+        + tuple(f"select-{index}" for index in range(10)),
+    )
     nav.add_argument("--runtime-dir", type=Path)
     rpc = sub.add_parser("_rpc")
     rpc.add_argument("state", type=Path)
