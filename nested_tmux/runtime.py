@@ -16,7 +16,7 @@ from pathlib import Path
 
 from .config import Config, Error, Node, as_data, parse
 from .control import Control, Transport, TransportError, clean_env
-from .inventory import LEGACY_RE, Inventory, digest, run, socket_name
+from .inventory import LEGACY_RE, Inventory, digest, run, socket_name, terminate
 from .ssh import SSHMaster
 
 
@@ -425,7 +425,13 @@ class Tree:
             "C-t": "new",
         }.items():
             ctl.call("bind-key", "-T", "root", key, "run-shell", key_script(action))
-        for key, action in {"C-c": "new", "c": "new", "C-a": "last", "[": "copy"}.items():
+        for key, action in {
+            "C-c": "new",
+            "c": "new",
+            "C-a": "last",
+            "[": "copy",
+            "k": "kill-local",
+        }.items():
             ctl.call("bind-key", "-T", "prefix", key, "run-shell", key_script(action))
         for index in range(10):
             script = key_script(f"select-{index}")
@@ -433,7 +439,12 @@ class Tree:
             ctl.call("bind-key", "-T", "prefix", str(index), "run-shell", script)
         ctl.call("bind-key", "-T", "prefix", "d", "detach-client")
         ctl.call("bind-key", "-T", "prefix", "a", "send-prefix")
-        for key, operation in {"C-s": "row", "C-r": "ssh-row", "A": "rename"}.items():
+        for key, operation in {
+            "C-s": "row",
+            "C-r": "ssh-row",
+            "A": "rename",
+            '"': "rename",
+        }.items():
             script = shlex.join(launcher("_prompt", self.state, operation)).replace("#", "##")
             ctl.call(
                 "bind-key",
@@ -508,6 +519,17 @@ class Tree:
             return self.add(self.active, {"id": ident, "title": "shell"})
         elif action == "remove":
             return self.remove(self.current_path())
+        elif action == "kill-local":
+            result = terminate(
+                Inventory(self.config.name, self.state, self.ssh_config, self.masters),
+                {"local"},
+                all_rows=True,
+                local=True,
+                tree=self,
+            )
+            if result["errors"]:
+                raise Error("; ".join(result["errors"]))
+            return result
         elif action == "copy":
             ctl.call("copy-mode", "-t", "tree:")
         else:

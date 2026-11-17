@@ -65,6 +65,10 @@ class KeyTests(unittest.TestCase):
                 result, _ = self.exchange([b"OK\n"], action=f"select-{index}")
                 self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_local_shutdown_action(self):
+        result, _ = self.exchange([b"OK\n"], action="kill-local")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_fragmented_success_and_sanitized_errors(self):
         result, _ = self.exchange([b"O", b"K", b"\n"], delay=0.01)
         self.assertEqual(result.returncode, 0, result.stderr)

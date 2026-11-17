@@ -15,6 +15,29 @@ from nested_tmux.ssh import SSHMaster
 
 
 class SSHTests(ServiceCase):
+    def test_quote_shortcut_renames_remote_terminal(self):
+        server = self.server()
+        data = fixture()
+        data["root"]["children"][1]["host"] = "nt-test-host"
+        self.launch(data, server.client_config)
+        terminal = self.attach_pty()
+        os.write(terminal, b"\x011\x1b[1;3A")
+        eventually(lambda: request(self.state, "status")["active"] == "work/project")
+        before = self.tmux("work/project", "display-message", "-p", "#{pane_pid}")
+        os.write(terminal, b'\x01"')
+        eventually(lambda: b"New title:" in self.output)
+        os.write(terminal, b"Remote editor\r")
+        eventually(
+            lambda: (
+                self.tmux("work/project", "display-message", "-p", "#{window_name}")
+                == "Remote editor"
+            )
+        )
+        self.assertEqual(self.tmux("work/project", "display-message", "-p", "#{pane_pid}"), before)
+        self.assertEqual(self.tmux("work", "display-message", "-p", "#{window_name}"), "project")
+        remote = request(self.state, "dump")["root"]["children"][1]
+        self.assertEqual(remote["children"][0]["title"], "Remote editor")
+
     def test_numbered_tab_shortcuts_follow_remote_active_row(self):
         server = self.server()
         self.check_numbered_tab_shortcuts(host="nt-test-host", ssh_config=server.client_config)

@@ -105,6 +105,7 @@ int main(int argc, char **argv) {
     if (argc != 3)
         return fail("usage: nested-tmux-key SOCKET ACTION");
     const char *actions[] = {"left", "right", "up", "down", "last", "new", "copy", "remove",
+                            "kill-local",
                             "select-0", "select-1", "select-2", "select-3", "select-4",
                             "select-5", "select-6", "select-7", "select-8", "select-9"};
     size_t i;

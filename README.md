@@ -20,7 +20,7 @@ branch name, an SSH host alias, and an optional remote directory (default `~`).
 See the SSH setup instructions below for authentication and host-key setup.
 
 Tabs start at **0** and display their node ID by default, such as `shell` or
-`editor`. Shortcut-created tabs are always labeled `shell`. Use **Ctrl+a, A** or
+`editor`. Shortcut-created tabs are always labeled `shell`. Use **Ctrl+a, "** or
 YAML `title` to give a tab a different name. New tabs inherit the current pane's
 live working directory, locally and over SSH.
 
@@ -110,8 +110,9 @@ already attached terminal takes precedence over a startup size hint.
 | Ctrl+a, Ctrl+s | New child row; prompt for its ID |
 | Ctrl+a, Ctrl+r | New SSH child row; prompt for ID, host alias, and remote cwd |
 | Ctrl+a, Ctrl+a | Last tab |
-| Ctrl+a, A | Rename the selected terminal or child row |
+| Ctrl+a, " or Ctrl+a, A | Rename the selected terminal or child row |
 | Ctrl+a, x | Remove the selected terminal or entire child row, with confirmation |
+| Ctrl+a, k | Kill all local rows in this workspace; remote tmux sessions keep running |
 | Ctrl+a, d | Detach; processes keep running |
 | Ctrl+a, [ | Copy mode in the active row |
 | Ctrl+a, a | Send a literal Ctrl+a to the terminal |
@@ -129,6 +130,10 @@ selected, then press **Ctrl+a, x** and confirm with **y**. This terminates every
 terminal and nested row inside it. From the CLI, use
 `nested-tmux remove work/project`. Use `down` to close the root workspace.
 Removing a row's last terminal also closes that row and any empty ancestors.
+**Ctrl+a, k** runs the equivalent of `kill --all --local` for the current
+workspace, even when the active row is remote. It closes local rows and the
+controller immediately, without a confirmation prompt. Other workspaces and
+remote tmux sessions survive. Unsaved local edits are lost.
 
 With `nested-tmux` on PATH, you can also manage the default workspace by hand:
 

@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 import sys
 from unittest.mock import patch
 
@@ -25,6 +26,39 @@ from nested_tmux.ssh import SSHMaster
 
 
 class InventoryTests(ServiceCase):
+    def test_k_shortcut_kills_workspace_locally_and_preserves_remote(self):
+        server = self.remote()
+        before = {
+            path: self.tmux(path, "list-panes", "-a", "-F", "#{pane_pid}")
+            for path in ("work/project", "work/project/build")
+        }
+        self.status = request(
+            self.state,
+            "add",
+            parent="work",
+            node={"id": "local", "children": [{"id": "shell", "command": ["cat"]}]},
+        )
+        other = self.build({**fixture(), "name": "other"})
+        recipe = self.config_path.read_bytes()
+        terminal = self.attach_pty()
+        # Invoke from a remote row: k still shuts down only this workspace locally.
+        request(self.state, "nav", action="down")
+        os.write(terminal, b"\x011\x1b[1;3A")
+        eventually(lambda: request(self.state, "status")["active"] == "work/project")
+        authentications = server.authentications
+        os.write(terminal, b"\x01k")
+        eventually(lambda: not (self.state / "rpc.sock").exists())
+        eventually(lambda: self.attachment.poll() is not None)
+        self.assertEqual(self.cli("ls", "--local")[0], "WORKSPACE\tHOST\tROW\n")
+        other.root.control.call("has-session", "-t", "tree")
+        self.assertEqual(self.config_path.read_bytes(), recipe)
+        self.assertEqual(server.authentications, authentications)
+        self.assertFalse(any(path.is_socket() for path in self.state.glob("s-*")))
+        # Local shutdown closes the SSH master too; reopen it only to inspect survivors.
+        SSHMaster(self.state, "nt-test-host", self.ssh_config).ensure()
+        for path, pids in before.items():
+            self.assertEqual(self.tmux(path, "list-panes", "-a", "-F", "#{pane_pid}"), pids)
+
     def cli(self, operation, *arguments, config=True, expected=0, runtime=None):
         args = [operation]
         if config:
