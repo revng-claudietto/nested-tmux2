@@ -69,7 +69,8 @@ def start(config, config_path, state, ssh_config, size=None):
         except (FileNotFoundError, ConnectionRefusedError):
             if process.poll() is not None:
                 raise Error(
-                    (state / "controller.log").read_text().strip() or "controller failed to start"
+                    (state / "controller.log").read_text().strip().removeprefix("nested-tmux: ")
+                    or "controller failed to start"
                 )
             time.sleep(0.05)
     process.terminate()
@@ -258,7 +259,17 @@ def main(argv=None):
             )
             if args.op == "attach" or args.attach:
                 # A dedicated root server, never the invoking user's current server.
-                attach = ["tmux", "-L", result["rows"][0]["socket"], "attach-session", "-t", "tree"]
+                attach = [
+                    "tmux",
+                    "-N",
+                    "-L",
+                    result["rows"][0]["socket"],
+                    "-f",
+                    "/dev/null",
+                    "attach-session",
+                    "-t",
+                    "tree",
+                ]
                 os.execvpe(attach[0], attach, clean_env())
         elif args.op == "nav":
             result = request(state, "nav", action=args.action)

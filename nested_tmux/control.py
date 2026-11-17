@@ -49,25 +49,45 @@ class Control:
         self.threads = []
 
     def connect(self, create=True):
-        for attempt in range(3):
+        deadline = time.monotonic() + self.timeout
+        delay = 0.05
+        last_error = None
+        while time.monotonic() < deadline:
             try:
-                self._connect(create)
+                self._connect(create, deadline)
                 return
             except TransportError as exc:
-                if not create or "server exited unexpectedly" not in str(exc) or attempt == 2:
+                if not create or "server exited unexpectedly" not in str(exc):
                     raise
-                # kill-server can acknowledge before its listener disappears.
+                # A shutting-down server rejects new clients until its existing
+                # clients finish exiting. This can take longer than an SSH RTT.
                 # Only the idempotent bootstrap new-session -A is retried here;
                 # no user launch command has been sent. Recovery is attach-only.
-                time.sleep(0.05 * (attempt + 1))
+                last_error = exc
+                time.sleep(max(0, min(delay, deadline - time.monotonic())))
+                delay = min(delay * 2, 0.5)
+        raise TransportError(
+            f"tmux server on {self.transport.host} ({self.socket_name}) did not become ready "
+            f"within {self.timeout:g}s; it may still be shutting down with attached clients "
+            f"or failing during startup. Last error: {last_error}"
+        ) from last_error
 
-    def _connect(self, create):
+    def _connect(self, create, deadline):
         self.close()
         if self.transport.master:
             self.transport.master.ensure()
         self.lines = queue.Queue(maxsize=MAX_QUEUED_LINES)
         self.errors = deque(maxlen=20)
-        args = ["tmux", "-u", "-L", self.socket_name, "-f", "/dev/null", "-C"]
+        args = [
+            "tmux",
+            "-u",
+            *([] if create else ["-N"]),
+            "-L",
+            self.socket_name,
+            "-f",
+            "/dev/null",
+            "-C",
+        ]
         args += (
             ["new-session", "-A", "-s", "tree", "-n", "__bootstrap__", "sleep 2147483647"]
             if create
@@ -145,8 +165,10 @@ class Control:
         for thread in self.threads:
             thread.start()
         try:
-            self._response()
-            self.call("refresh-client", "-f", "no-output,ignore-size")
+            self._response(timeout=deadline - time.monotonic())
+            self.call(
+                "refresh-client", "-f", "no-output,ignore-size", timeout=deadline - time.monotonic()
+            )
         except Exception:
             self.close()
             raise

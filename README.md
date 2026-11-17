@@ -465,6 +465,12 @@ you restart it with `up`. A lost connection alone never counts as a terminal exi
 To pick up a new application version for an existing workspace, run `stop`, then
 `up` or `attach`, with the same `--name`; surviving terminals keep running.
 
+After `down`, a tmux server may still be waiting for attached clients to finish
+disconnecting. Startup retries for up to 15 seconds per row while that server
+exits, without replaying application launch commands. If it times out, the error
+identifies the host and socket; close stalled old clients before retrying.
+Attachment loops and control reconnects never start missing servers.
+
 The runtime socket/log directory lives under `$XDG_RUNTIME_DIR` or a private
 `/tmp/nested-tmux-UID` directory. `--runtime-dir /private/path` overrides the base.
 Changing it does not change row identity or create an independent workspace;

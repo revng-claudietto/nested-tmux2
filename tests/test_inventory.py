@@ -2,7 +2,11 @@ import contextlib
 import io
 import json
 import os
+import shlex
+import signal
+import subprocess
 import sys
+import threading
 from unittest.mock import patch
 
 from helpers import eventually, fixture
@@ -11,6 +15,7 @@ from test_service import ServiceCase
 
 from nested_tmux.cli import main, start
 from nested_tmux.config import Error, as_data, parse
+from nested_tmux.control import clean_env
 from nested_tmux.inventory import (
     Inventory,
     Record,
@@ -26,6 +31,54 @@ from nested_tmux.ssh import SSHMaster
 
 
 class InventoryTests(ServiceCase):
+    def test_down_then_start_waits_for_slow_remote_client_exit(self):
+        server = self.server()
+        launches = self.directory / "launches"
+        data = fixture()
+        data["root"]["children"][1]["host"] = "nt-test-host"
+        data["root"]["children"][1]["children"][0]["command"] = (
+            f"echo launch >> {shlex.quote(str(launches))}; exec cat"
+        )
+        self.launch(data, server.client_config)
+        eventually(launches.exists)
+        row = self.status["rows"][1]
+        # The SSH fixture is loopback. Pause only this test's extra tmux client
+        # to emulate an attached connection which takes time to acknowledge exit.
+        socket = server.directory / "t" / f"tmux-{os.getuid()}" / row["socket"]
+        client = subprocess.Popen(
+            ["tmux", "-N", "-S", str(socket), "-f", "/dev/null", "-C", "attach", "-t", "tree"],
+            env=clean_env(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        def cleanup():
+            if client.poll() is None:
+                client.send_signal(signal.SIGCONT)
+                client.terminate()
+                client.wait(timeout=5)
+            for stream in (client.stdin, client.stdout, client.stderr):
+                stream.close()
+
+        self.addCleanup(cleanup)
+        eventually(
+            lambda: (
+                str(client.pid)
+                in self.tmux("work/project", "list-clients", "-F", "#{client_pid}").splitlines()
+            )
+        )
+        client.send_signal(signal.SIGSTOP)
+        self.cli("down")
+        timer = threading.Timer(
+            2, lambda: client.send_signal(signal.SIGCONT) if client.poll() is None else None
+        )
+        timer.start()
+        self.addCleanup(timer.join)
+        self.status = start(self.config, self.config_path, self.state, server.client_config)
+        self.tmux("work/project", "has-session", "-t", "tree")
+        eventually(lambda: launches.read_text().splitlines() == ["launch", "launch"])
+
     def test_k_shortcut_kills_workspace_locally_and_preserves_remote(self):
         server = self.remote()
         before = {

@@ -5,6 +5,34 @@ from nested_tmux.control import Control, Transport
 
 
 class ControlTests(TreeCase):
+    def test_reconnect_never_starts_an_empty_server(self):
+        from nested_tmux.inventory import socket_directory
+
+        control = Control(Transport(), "missing-row")
+        self.addCleanup(control.close)
+        with self.assertRaises(Error):
+            control.connect(create=False)
+        self.assertFalse((socket_directory() / "missing-row").exists())
+
+    def test_shutdown_retries_have_a_deadline(self):
+        import time
+        from unittest.mock import patch
+
+        from nested_tmux.control import TransportError
+
+        control = Control(Transport(), "stopping-row", timeout=0.15)
+        error = TransportError("tmux control exited on local: %exit server exited unexpectedly")
+        with patch.object(control, "_connect", side_effect=error) as connect:
+            before = time.monotonic()
+            with self.assertRaisesRegex(TransportError, "stopping-row.*shutting down"):
+                control.connect()
+            self.assertLess(time.monotonic() - before, 1)
+            self.assertGreater(connect.call_count, 1)
+            connect.reset_mock()
+            with self.assertRaises(TransportError):
+                control.connect(create=False)
+            self.assertEqual(connect.call_count, 1)
+
     def test_round_trip_and_error_response_synchronization(self):
         tree = self.build(
             {

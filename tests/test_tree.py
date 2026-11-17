@@ -4,6 +4,24 @@ from nested_tmux.config import Error
 
 
 class TreeTests(TreeCase):
+    def test_missing_child_attachment_cannot_start_server_or_read_user_config(self):
+        import shlex
+
+        home = self.directory / "home"
+        home.mkdir()
+        marker = home / "config-loaded"
+        (home / ".tmux.conf").write_text(
+            "run-shell " + shlex.quote("touch " + shlex.quote(str(marker))) + "\n"
+        )
+        data = fixture()
+        data["root"]["env"] = {"HOME": str(home), "XDG_CONFIG_HOME": str(home / "config")}
+        tree = self.build(data)
+        tree._kill_row(tree.rows["work/project"])
+        eventually(
+            lambda: "no server running" in self.capture("work", tree.root.windows["work/project"])
+        )
+        self.assertFalse(marker.exists())
+
     def test_explicit_titles_remain_literal_tmux_format_text(self):
         marker = self.directory / "title-executed"
         title = f"#{{pane_id}} #(touch {marker})"
