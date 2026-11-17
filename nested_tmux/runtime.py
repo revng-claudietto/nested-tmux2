@@ -498,7 +498,7 @@ class Tree:
             ident, number = "shell", 2
             while ident in used:
                 ident, number = f"shell-{number}", number + 1
-            return self.add(self.active, {"id": ident})
+            return self.add(self.active, {"id": ident, "title": "shell"})
         elif action == "remove":
             return self.remove(self.current_path())
         elif action == "copy":
@@ -546,6 +546,17 @@ class Tree:
         data = as_data(self.config)
         self._find(data, parent)["children"].append(node)
         config = parse(data)  # Validate before tmux changes or shell execution.
+        row = self.rows[parent]
+        if (
+            not node.get("children")
+            and "cwd" not in node
+            and node.get("host", row.node.host) == row.node.host
+        ):
+            cwd = self._pane_cwd(row, "tree:")
+            if cwd is not None:
+                node = {**node, "cwd": cwd}
+                self._find(data, parent)["children"][-1] = node
+                config = parse(data)
         # This operation will reveal the destination. Do so before launching
         # anything: tmux defers resizing hidden windows until they are selected.
         self._focus(parent)
@@ -748,26 +759,28 @@ class Tree:
         self._save_metadata()
         return self.status()
 
+    @staticmethod
+    def _pane_cwd(row, target):
+        try:
+            cwd = row.control.call("display-message", "-p", "-t", target, "#{pane_current_path}")[0]
+            # tmux 3.4's printable output inserts a slash before shell variables.
+            cwd = re.sub(r"\\(?=\$[A-Za-z_{])", "", cwd)
+            if cwd.startswith("/") and not any(ord(char) < 32 for char in cwd) and "#" not in cwd:
+                return cwd
+        except (Error, IndexError):
+            pass
+        return None
+
     def dump(self):
         data = as_data(self.config)
         for node in self.config.root.walk():
             if node.branch:
                 continue
             row = self.rows[self.parents[node.path]]
-            try:
-                cwd = row.control.call(
-                    "display-message", "-p", "-t", row.windows[node.path], "#{pane_current_path}"
-                )[0]
-                # tmux 3.4's printable output inserts a slash before shell variables.
-                cwd = re.sub(r"\\(?=\$[A-Za-z_{])", "", cwd)
-                if (
-                    cwd.startswith("/")
-                    and not any(ord(char) < 32 for char in cwd)
-                    and "#" not in cwd
-                ):
-                    self._find(data, node.path)["cwd"] = cwd
-            except (Error, KeyError, IndexError):
-                pass  # Keep launch cwd for unavailable or removed terminals.
+            target = row.windows.get(node.path)
+            cwd = self._pane_cwd(row, target) if target is not None else None
+            if cwd is not None:
+                self._find(data, node.path)["cwd"] = cwd
         return data
 
     def status(self):

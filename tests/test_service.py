@@ -3,6 +3,7 @@ import json
 import os
 import pty
 import select
+import shlex
 import socket
 import struct
 import subprocess
@@ -125,6 +126,48 @@ class ServiceCase(TreeCase):
 
 
 class ServiceTests(ServiceCase):
+    def test_new_tabs_inherit_live_cwd_and_keep_shell_label(self):
+        self.launch(
+            {
+                "name": "test",
+                "root": {
+                    "id": "work",
+                    "cwd": str(self.directory),
+                    "children": [{"id": "shell"}],
+                },
+            }
+        )
+        terminal = self.attach_pty()
+        cwd = self.directory / "tab cwd with ' quote"
+        cwd.mkdir()
+        os.write(terminal, ("cd " + shlex.quote(str(cwd)) + "\r").encode())
+        eventually(
+            lambda: self.tmux("work", "display-message", "-p", "#{pane_current_path}") == str(cwd)
+        )
+        for count, keys in enumerate((b"\x14", b"\x01c"), start=2):
+            os.write(terminal, keys)  # Ctrl+t and Ctrl+a, c
+            eventually(lambda: len(request(self.state, "status")["rows"][0]["windows"]) == count)
+            self.assertEqual(
+                self.tmux("work", "display-message", "-p", "#{pane_current_path}"), str(cwd)
+            )
+            self.assertEqual(self.tmux("work", "display-message", "-p", "#{window_name}"), "shell")
+        children = request(self.state, "dump")["root"]["children"]
+        self.assertEqual([child["id"] for child in children], ["shell", "shell-2", "shell-3"])
+        self.assertEqual([child["title"] for child in children[1:]], ["shell", "shell"])
+        # The CLI's add-terminal RPC inherits too, unless --cwd was supplied.
+        request(self.state, "add", node={"id": "inherited", "command": ["cat"]})
+        self.assertEqual(
+            self.tmux("work", "display-message", "-p", "#{pane_current_path}"), str(cwd)
+        )
+        request(
+            self.state,
+            "add",
+            node={"id": "explicit", "cwd": str(self.directory), "command": ["cat"]},
+        )
+        self.assertEqual(
+            self.tmux("work", "display-message", "-p", "#{pane_current_path}"), str(self.directory)
+        )
+
     def test_discovered_recipe_start_save_and_live_tree_restart(self):
         from nested_tmux.runtime import launcher
 
@@ -271,7 +314,7 @@ class ServiceTests(ServiceCase):
         eventually(
             lambda: (
                 self.tmux("work", "list-windows", "-F", "#{window_index}:#{window_name}")
-                == "0:shell\n1:shell-2"
+                == "0:shell\n1:shell"
             )
         )
 

@@ -73,13 +73,38 @@ class SSHTests(ServiceCase):
         self.assertEqual(remote["host"], "nt-test-host")
         self.assertEqual(remote["children"][0]["cwd"], str(cwd))
         self.assertEqual(remote["children"][0]["id"], "shell")
+        os.write(terminal, b"\x14")  # A new tab inherits the remote pane's live cwd.
+        eventually(
+            lambda: len(request(self.state, "dump")["root"]["children"][-1]["children"]) == 2
+        )
+        self.assertEqual(
+            self.tmux("work/remote", "display-message", "-p", "#{pane_current_path}"), str(cwd)
+        )
+        self.assertEqual(
+            self.tmux("work/remote", "display-message", "-p", "#{window_name}"), "shell"
+        )
+        remote = request(self.state, "dump")["root"]["children"][-1]
+        self.assertEqual(remote["children"][-1]["id"], "shell-2")
+        self.assertEqual(remote["children"][-1]["title"], "shell")
+        # Returning to the local row must not use a remote terminal's directory.
+        request(self.state, "nav", action="down")
+        local_cwd = self.tmux("work", "display-message", "-p", "#{pane_current_path}")
+        request(self.state, "nav", action="new")
+        self.assertEqual(
+            self.tmux("work", "display-message", "-p", "#{pane_current_path}"), local_cwd
+        )
+        self.assertNotEqual(local_cwd, str(cwd))
         # Disconnect its control stream: export still contains the remote tree,
         # with the configured launch cwd as fallback instead of guessing.
         server.pause()
         self.addCleanup(server.resume)
         SSHMaster(self.state, "nt-test-host", server.client_config).stop()
         eventually(lambda: request(self.state, "status")["errors"])
-        unavailable = request(self.state, "dump")["root"]["children"][-1]
+        unavailable = next(
+            node
+            for node in request(self.state, "dump")["root"]["children"]
+            if node["id"] == "remote"
+        )
         self.assertEqual(unavailable["host"], "nt-test-host")
         self.assertEqual(
             unavailable["children"][0].get("cwd", unavailable["cwd"]), str(self.directory)

@@ -7,7 +7,7 @@ nix run github:revng-claudietto/nested-tmux2
 This opens a workspace with one shell in your current directory. No configuration
 file is needed. Run it from a plain terminal, then build your tree as you work:
 
-1. **Ctrl+t** creates a regular terminal tab.
+1. **Ctrl+t** creates a regular terminal tab in the current tab's working directory.
 2. **Ctrl+a, Ctrl+s** creates a branch with its own row; enter a name at the prompt.
 3. **Alt+Left/Right** switches tabs. **Alt+Up/Down** moves into or out of a branch.
 4. Type **exit** or press **Ctrl+d** at a shell prompt to close that terminal.
@@ -20,7 +20,9 @@ branch name, an SSH host alias, and an optional remote directory (default `~`).
 See the SSH setup instructions below for authentication and host-key setup.
 
 Tabs start at **0** and display their node ID by default, such as `shell` or
-`editor`. Use **Ctrl+a, A** or YAML `title` to give a tab a different name.
+`editor`. Shortcut-created tabs are always labeled `shell`. Use **Ctrl+a, A** or
+YAML `title` to give a tab a different name. New tabs inherit the current pane's
+live working directory, locally and over SSH.
 
 To open entirely separate workspaces by name:
 
@@ -286,6 +288,9 @@ nested-tmux dump work.yaml -o saved-work.yaml
 
 Omit `--parent` to use the active row. `add-row` creates a row with one shell;
 it also accepts `--host` and `--cwd`. Removing a row terminates its subtree.
+`add-terminal` inherits the selected terminal's live directory in the target row;
+use `--cwd` to override it. If that directory cannot be read or represented in
+the configuration, the row's configured directory is used.
 Use the keyboard shortcuts for ordinary tab/row creation and removal.
 
 Export includes managed rows and terminals, IDs, titles, hosts, environments,
@@ -294,7 +299,8 @@ This includes all managed remote branches: their SSH host aliases and cwd values
 queried from tmux on the remote host.
 Only explicitly assigned titles are exported; omitted titles default to the ID
 when the tree is restored. Generated IDs such as `shell-2` identify terminals
-in CLI paths and YAML, and supply their default displayed names.
+in CLI paths and YAML; shortcut-created tabs save an explicit `title: shell`
+so their displayed labels stay `shell`.
 Unavailable cwd values fall back to the launch cwd. Export does not recover a
 program manually launched inside an interactive shell, shell variables, process
 memory, scrollback, split panes, or the current selection. It does not discover
